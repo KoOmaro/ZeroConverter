@@ -177,6 +177,14 @@ fn usable(ff: &Ffmpeg) -> bool {
     missing_features(&encoder_names(ff), &muxers).is_empty()
 }
 
+/// Whether this build can fetch its own FFmpeg (the CLI is built without it).
+fn can_download() -> bool {
+    #[cfg(feature = "ffmpeg-download")]
+    return super::install::install_supported();
+    #[cfg(not(feature = "ffmpeg-download"))]
+    false
+}
+
 /// The first usable system FFmpeg, looked up once per process. Without an
 /// automatic download (off Windows x64) a system FFmpeg that runs but lacks
 /// a feature is still taken, as before: only the routes needing it fail.
@@ -189,7 +197,7 @@ fn system() -> Option<Ffmpeg> {
                 .filter_map(|d| in_dir(d, Source::System))
                 .collect();
             found.iter().find(|f| usable(f)).cloned().or_else(|| {
-                (!super::install::install_supported())
+                (!can_download())
                     .then(|| found.into_iter().find(|f| version_line(f).is_some()))
                     .flatten()
             })
