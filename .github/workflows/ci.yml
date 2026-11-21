@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Only the public repository runs CI; copies and forks elsewhere stay quiet.
+    if: github.repository_owner == 'zerofoundry'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The version comes from src-tauri/rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.94.0"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Frontend
+        run: |
+          npm ci
+          npm run build
+          npm run check:frontend-boundaries
+          npm run test:ui
+
+      - name: Third-party licenses (no GPL or AGPL)
+        run: node scripts/licenses.mjs --check
+
+      - name: Rust format
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --workspace --no-fail-fast --locked
+
+      - name: Engine without MP3 (LAME) builds
+        working-directory: src-tauri
+        run: cargo check -p zeroconverter-core -p zeroconverter-cli --no-default-features --locked

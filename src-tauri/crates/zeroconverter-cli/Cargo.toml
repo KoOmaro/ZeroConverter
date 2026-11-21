@@ -1,0 +1,29 @@
+[package]
+name = "zeroconverter-cli"
+version = "0.1.0"
+description = "ZeroConverter from the command line: JSON in, JSON lines out."
+authors = ["ZeroFoundry"]
+license = "MIT"
+publish = false
+edition = "2021"
+
+[[bin]]
+name = "zeroconverter"
+path = "src/main.rs"
+
+[features]
+default = ["mp3"]
+mp3 = ["zeroconverter-core/mp3"]
+
+[dependencies]
+zeroconverter-core = { path = "../zeroconverter-core", default-features = false }
+zero_fs = { path = "../zero_fs" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ctrlc = { version = "3", features = ["termination"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["png"] }

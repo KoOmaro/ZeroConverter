@@ -1,0 +1,1084 @@
+@import "tailwindcss";
+
+/* Fonts are bundled locally (the app is offline). Inter and JetBrains Mono come
+   from @fontsource-variable (imported in main.tsx); Space Grotesk is the
+   ZeroFoundry brand face (SIL OFL, see assets/fonts/SpaceGrotesk-OFL.txt). */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/SpaceGrotesk-Variable.ttf") format("truetype");
+  font-weight: 300 700;
+  font-display: swap;
+}
+
+/* ═══ Graphite Steel — the ZeroFoundry design language ═══
+   Values are HSL triplets so components can add alpha: hsl(var(--x) / 0.5). */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: 216 13% 8%;          /* shell #111316 */
+  --bg-subtle: 210 13% 6%;       /* inset #0D0F11 */
+  --bg-workspace: 216 11% 9%;    /* #141619 */
+  --bg-titlebar: 216 13% 8%;     /* shell #111316 */
+  --bg-rail: 210 12% 6%;         /* rail #0E1012 */
+  --bg-dock: 210 11% 6%;         /* context dock: root 70% + surface-1 */
+  --edge-shell: 218 10% 16% / 0.28;
+  --scroll-idle: 210 12% 31% / 0.34;
+  --scroll-engaged: 210 8% 49% / 0.66;
+
+  --surface-1: 210 11% 11%;      /* #181B1E */
+  --surface-2: 210 12% 13%;      /* #1E2226 */
+  --surface-3: 207 11% 16%;      /* #252A2E */
+
+  --border-subtle: 212 12% 21%;  /* #30363D */
+  --border-strong: 210 12% 31%;  /* #46505A */
+  --border-layout: 218 10% 16%;   /* #26292E */
+
+  --text-primary: 213 30% 93%;    /* #E6E8EA */
+  --text-secondary: 210 10% 69%; /* #A8B0B8 */
+  --text-tertiary: 210 8% 49%;
+  --text-disabled: 215 5% 43%;
+  --text-on-accent: 213 30% 93%; /* #E7ECF2 */
+
+  /* Accent: steel blue for fills, light steel for text on dark surfaces. */
+  --accent: 207 49% 34%;         /* #2D5C82 */
+  --accent-hover: 204 46% 40%;   /* #376F94 */
+  --accent-strong: 211 22% 64%;  /* #8FA3B8 */
+  --accent-soft: 207 21% 19%;    /* #26313A */
+  --accent-border: 210 12% 31%;
+
+  --success: 140 48% 70%;        /* #6F9F7A */
+  --success-soft: 145 35% 11%;
+  --success-border: 139 35% 25%;
+
+  --warning: 44 73% 67%;         /* #B89A5A */
+  --warning-soft: 42 45% 11%;
+  --warning-border: 45 59% 25%;
+
+  --danger: 5 75% 78%;           /* #B46A61 */
+  --danger-soft: 357 29% 13%;
+  --danger-border: 358 38% 31%;
+
+  --info: 209 100% 76%;
+  --info-soft: 211 57% 15%;
+  --info-border: 207 52% 32%;
+
+  --selection-bg: 207 21% 19%;
+  --row-hover: 210 12% 13%;
+
+  --input-bg: 210 13% 6%;
+  --input-border: 212 12% 21%;
+  --input-border-focus: 209 18% 57%;
+
+  --panel-overlay: 210 20% 2% / 0.6;
+  --drop-overlay-bg: 210 15% 6% / 0.88;
+
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-mid: 0 12px 32px rgba(0, 0, 0, 0.45);
+
+  --disabled-bg: 210 11% 11%;
+  --disabled-border: 218 10% 16%;
+  --disabled-text: 215 5% 43%;
+
+  --focus-ring: 209 18% 57%;     /* #7F93A6 */
+
+  /* Hover is a faint veil over whatever is underneath, never a new surface. */
+  --hover-veil: 0 0% 100% / 0.03;
+  --press-veil: 0 0% 100% / 0.06;
+}
+
+/* ═══ Scales. Components take sizes from here, not from one-off values. ═══ */
+:root {
+  --control-sm: 24px;
+  --control-md: 30px;
+  --control-lg: 36px;
+
+  --press-scale: 0.965;
+  --press-in: 90ms;
+  --press-out: 240ms;
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: 210 21% 95%;
+  --bg-subtle: 212 20% 87%;
+  --bg-workspace: 214 17% 92%;
+  --bg-titlebar: 210 21% 95%;
+  --bg-rail: 213 19% 89%;
+  --bg-dock: 210 20% 96%;
+  --edge-shell: 212 16% 82% / 0.6;
+  --scroll-idle: 211 13% 66% / 0.34;
+  --scroll-engaged: 211 11% 43% / 0.66;
+
+  --surface-1: 210 25% 98%;
+  --surface-2: 210 20% 96%;
+  --surface-3: 210 21% 95%;
+
+  --border-subtle: 212 16% 77%;
+  --border-strong: 211 13% 66%;
+  --border-layout: 212 16% 82%;
+
+  --text-primary: 213 14% 12%;
+  --text-secondary: 211 13% 32%;
+  --text-tertiary: 211 11% 43%;
+  --text-disabled: 213 11% 60%;
+  --text-on-accent: 0 0% 100%;
+
+  --accent: 205 56% 40%;
+  --accent-hover: 205 57% 33%;
+  --accent-strong: 206 46% 40%;
+  --accent-soft: 204 52% 89%;
+  --accent-border: 211 13% 66%;
+
+  --success: 143 65% 25%;
+  --success-soft: 137 37% 93%;
+  --success-border: 139 36% 66%;
+
+  --warning: 42 100% 27%;
+  --warning-soft: 44 70% 91%;
+  --warning-border: 43 63% 57%;
+
+  --danger: 6 55% 41%;
+  --danger-soft: 9 60% 93%;
+  --danger-border: 7 52% 70%;
+
+  --info: 203 64% 34%;
+  --info-soft: 204 59% 93%;
+  --info-border: 202 54% 70%;
+
+  --selection-bg: 204 52% 89%;
+  --row-hover: 210 20% 96%;
+
+  --input-bg: 212 20% 87%;
+  --input-border: 212 16% 77%;
+  --input-border-focus: 205 59% 33%;
+
+  --panel-overlay: 210 20% 10% / 0.12;
+  --drop-overlay-bg: 210 30% 97% / 0.9;
+
+  --shadow-low: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-mid: 0 12px 32px rgba(16, 24, 40, 0.14);
+
+  --disabled-bg: 210 25% 98%;
+  --disabled-border: 212 16% 82%;
+  --disabled-text: 213 11% 60%;
+
+  --focus-ring: 205 59% 33%;
+
+  --hover-veil: 213 14% 12% / 0.05;
+  --press-veil: 213 14% 12% / 0.09;
+}
+
+/* Section labels in Graphite Steel (#6E7681);
+   other palettes use their own tertiary text. */
+:root[data-theme="dark"] {
+  --text-section: 214 8% 47%;
+}
+
+/* ═══ ZeroFoundry studio palettes. Anything not set here comes
+   from Graphite Steel above. ═══ */
+
+:root[data-theme="twilight"] {
+  color-scheme: dark;
+  --bg-app: 264 17% 11%;
+  --bg-subtle: 267 17% 10%;
+  --bg-workspace: 264 15% 13%;
+  --bg-titlebar: 264 17% 11%;
+  --bg-rail: 267 19% 9%;
+  --bg-dock: 253 12% 8%;
+  --edge-shell: 268 15% 19% / 0.28;
+  --scroll-idle: 276 14% 38% / 0.34;
+  --scroll-engaged: 272 14% 60% / 0.66;
+  --surface-1: 266 15% 18%;
+  --surface-2: 268 16% 21%;
+  --surface-3: 270 16% 24%;
+  --border-subtle: 271 16% 26%;
+  --border-strong: 276 14% 38%;
+  --border-layout: 268 15% 19%;
+  --text-primary: 18 23% 91%;
+  --text-secondary: 274 17% 74%;
+  --text-tertiary: 272 14% 60%;
+  --text-disabled: 271 10% 48%;
+  --text-on-accent: 264 15% 13%;
+  --accent: 263 44% 74%;
+  --accent-hover: 263 52% 80%;
+  --accent-strong: 263 44% 74%;
+  --accent-soft: 267 17% 23%;
+  --accent-border: 276 14% 38%;
+  --success: 138 32% 70%;
+  --success-soft: 154 18% 15%;
+  --success-border: 145 17% 33%;
+  --warning: 38 64% 70%;
+  --warning-soft: 27 20% 17%;
+  --warning-border: 37 30% 35%;
+  --danger: 2 59% 76%;
+  --danger-soft: 333 20% 17%;
+  --danger-border: 343 22% 39%;
+  --info: 211 68% 79%;
+  --info-soft: 223 23% 18%;
+  --info-border: 214 25% 38%;
+  --selection-bg: 267 17% 23%;
+  --row-hover: 268 16% 21%;
+  --input-bg: 267 17% 10%;
+  --input-border: 271 16% 26%;
+  --input-border-focus: 18 63% 77%;
+  --panel-overlay: 267 17% 10% / 0.6;
+  --drop-overlay-bg: 267 19% 9% / 0.88;
+  --disabled-bg: 266 15% 18%;
+  --disabled-border: 268 15% 19%;
+  --disabled-text: 271 10% 48%;
+  --focus-ring: 18 63% 77%;
+}
+
+:root[data-theme="desert-dusk"] {
+  color-scheme: dark;
+  --bg-app: 33 28% 8%;
+  --bg-subtle: 34 26% 5%;
+  --bg-workspace: 35 26% 9%;
+  --bg-titlebar: 33 28% 8%;
+  --bg-rail: 33 27% 6%;
+  --bg-dock: 33 10% 6%;
+  --edge-shell: 39 25% 13% / 0.28;
+  --scroll-idle: 35 22% 28% / 0.34;
+  --scroll-engaged: 37 15% 47% / 0.66;
+  --surface-1: 32 26% 11%;
+  --surface-2: 33 26% 14%;
+  --surface-3: 33 26% 17%;
+  --border-subtle: 35 23% 18%;
+  --border-strong: 35 22% 28%;
+  --border-layout: 39 25% 13%;
+  --text-primary: 35 42% 91%;
+  --text-secondary: 36 19% 66%;
+  --text-tertiary: 37 15% 47%;
+  --text-disabled: 36 14% 38%;
+  --text-on-accent: 38 51% 93%;
+  --accent: 21 57% 35%;
+  --accent-hover: 20 52% 39%;
+  --accent-strong: 36 49% 61%;
+  --accent-soft: 28 35% 17%;
+  --accent-border: 35 22% 28%;
+  --success: 86 41% 64%;
+  --success-soft: 84 38% 10%;
+  --success-border: 78 47% 23%;
+  --warning: 42 74% 66%;
+  --warning-soft: 37 45% 11%;
+  --warning-border: 44 66% 24%;
+  --danger: 9 73% 74%;
+  --danger-soft: 8 40% 12%;
+  --danger-border: 11 47% 29%;
+  --info: 202 52% 72%;
+  --info-soft: 204 44% 12%;
+  --info-border: 203 41% 29%;
+  --selection-bg: 28 35% 17%;
+  --row-hover: 33 26% 14%;
+  --input-bg: 34 26% 5%;
+  --input-border: 35 23% 18%;
+  --input-border-focus: 37 35% 57%;
+  --panel-overlay: 34 26% 5% / 0.6;
+  --drop-overlay-bg: 33 27% 6% / 0.88;
+  --disabled-bg: 32 26% 11%;
+  --disabled-border: 39 25% 13%;
+  --disabled-text: 36 14% 38%;
+  --focus-ring: 37 35% 57%;
+}
+
+:root[data-theme="matcha-atelier"] {
+  color-scheme: dark;
+  --bg-app: 111 12% 12%;
+  --bg-subtle: 111 13% 11%;
+  --bg-workspace: 111 10% 14%;
+  --bg-titlebar: 111 12% 12%;
+  --bg-rail: 120 12% 9%;
+  --bg-dock: 145 9% 8%;
+  --edge-shell: 99 14% 20% / 0.28;
+  --scroll-idle: 94 15% 37% / 0.34;
+  --scroll-engaged: 95 11% 54% / 0.66;
+  --surface-1: 120 10% 18%;
+  --surface-2: 102 13% 20%;
+  --surface-3: 93 16% 23%;
+  --border-subtle: 98 13% 25%;
+  --border-strong: 94 15% 37%;
+  --border-layout: 99 14% 20%;
+  --text-primary: 60 21% 88%;
+  --text-secondary: 90 14% 66%;
+  --text-tertiary: 95 11% 54%;
+  --text-disabled: 99 10% 41%;
+  --text-on-accent: 111 10% 14%;
+  --accent: 92 25% 69%;
+  --accent-hover: 86 26% 74%;
+  --accent-strong: 92 25% 69%;
+  --accent-soft: 101 16% 23%;
+  --accent-border: 94 15% 37%;
+  --success: 111 28% 71%;
+  --success-soft: 120 15% 17%;
+  --success-border: 110 18% 34%;
+  --warning: 41 49% 70%;
+  --warning-soft: 43 22% 16%;
+  --warning-border: 44 27% 33%;
+  --danger: 8 48% 74%;
+  --danger-soft: 7 20% 17%;
+  --danger-border: 11 24% 37%;
+  --info: 199 32% 73%;
+  --info-soft: 196 23% 16%;
+  --info-border: 197 22% 35%;
+  --selection-bg: 101 16% 23%;
+  --row-hover: 102 13% 20%;
+  --input-bg: 111 13% 11%;
+  --input-border: 98 13% 25%;
+  --input-border-focus: 22 41% 71%;
+  --panel-overlay: 111 13% 11% / 0.6;
+  --drop-overlay-bg: 120 12% 9% / 0.88;
+  --disabled-bg: 120 10% 18%;
+  --disabled-border: 99 14% 20%;
+  --disabled-text: 99 10% 41%;
+  --focus-ring: 22 41% 71%;
+}
+
+
+@theme {
+  --font-main: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-heading: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-brand: "Space Grotesk", "Inter Variable", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --color-app: hsl(var(--bg-app));
+  --color-subtle: hsl(var(--bg-subtle));
+  --color-workspace: hsl(var(--bg-workspace));
+  --color-titlebar: hsl(var(--bg-titlebar));
+  --color-rail: hsl(var(--bg-rail));
+  --color-dock: hsl(var(--bg-dock));
+  --color-edge: hsl(var(--edge-shell));
+  --color-surface-1: hsl(var(--surface-1));
+  --color-surface-2: hsl(var(--surface-2));
+  --color-surface-3: hsl(var(--surface-3));
+
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-border-strong: hsl(var(--border-strong));
+  --color-border-layout: hsl(var(--border-layout));
+
+  --color-text-primary: hsl(var(--text-primary));
+  --color-text-secondary: hsl(var(--text-secondary));
+  --color-text-tertiary: hsl(var(--text-tertiary));
+  --color-text-section: hsl(var(--text-section, var(--text-tertiary)));
+  --color-text-disabled: hsl(var(--text-disabled));
+  --color-on-accent: hsl(var(--text-on-accent));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-hover: hsl(var(--accent-hover));
+  --color-accent-strong: hsl(var(--accent-strong));
+  --color-accent-soft: hsl(var(--accent-soft));
+  --color-accent-border: hsl(var(--accent-border));
+
+  --color-success: hsl(var(--success));
+  --color-success-soft: hsl(var(--success-soft));
+  --color-success-border: hsl(var(--success-border));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-soft: hsl(var(--warning-soft));
+  --color-warning-border: hsl(var(--warning-border));
+
+  --color-danger: hsl(var(--danger));
+  --color-danger-soft: hsl(var(--danger-soft));
+  --color-danger-border: hsl(var(--danger-border));
+
+  --color-info: hsl(var(--info));
+  --color-info-soft: hsl(var(--info-soft));
+  --color-info-border: hsl(var(--info-border));
+
+  --color-selection-bg: hsl(var(--selection-bg));
+  --color-row-hover: hsl(var(--row-hover));
+  --color-focus: hsl(var(--focus-ring));
+
+  /* Quiet roles: lines inside a panel, hover, and "this one is selected". */
+  --color-separator: hsl(var(--border-subtle) / 0.45);
+  --color-hover: hsl(var(--hover-veil));
+  --color-pressed: hsl(var(--press-veil));
+  --color-selected: color-mix(in srgb, hsl(var(--accent-strong)) 10%, hsl(var(--surface-1)));
+  --color-selected-border: hsl(var(--accent-strong));
+
+  /* Radius scale: rounded-status / -control / -card / -panel. */
+  --radius-status: 3px;   /* badges, kbd */
+  --radius-control: 5px;  /* buttons, fields, chips */
+  --radius-card: 7px;     /* cards, previews */
+  --radius-panel: 8px;    /* dialogs, drop area */
+
+  --color-input-bg: hsl(var(--input-bg));
+  --color-input-border: hsl(var(--input-border));
+  --color-input-border-focus: hsl(var(--input-border-focus));
+
+  --shadow-low: var(--shadow-low);
+  --shadow-mid: var(--shadow-mid);
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply m-0 p-0 min-w-[320px] bg-app text-text-primary font-main antialiased overflow-hidden select-none;
+    font-size: 13px;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  /* One frame, never two: the ring sits on the control's own 1px border
+     instead of a gap away from it, so a bordered chip, card or checkbox does
+     not show its border plus a second outline around it. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--focus-ring));
+    outline-offset: -1px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+/* Settings → Appearance → Reduce motion. */
+:root[data-reduce-motion] *,
+:root[data-reduce-motion] *::before,
+:root[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Theme changes cross-fade (skipped when motion is reduced). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: var(--ease-standard);
+}
+
+/* ═══ Startup: the mark inside a slowly turning ring. ═══ */
+.zc-startup {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: hsl(var(--bg-rail));
+  animation: zc-reveal 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.zc-startup-identity {
+  position: relative;
+  display: grid;
+  width: 128px;
+  height: 128px;
+  place-items: center;
+}
+.zc-startup-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 1;
+  animation: zc-orbit 1.6s linear infinite;
+}
+.zc-startup-track {
+  stroke: hsl(var(--border-layout));
+}
+.zc-startup-arc {
+  stroke: hsl(var(--text-secondary));
+  stroke-linecap: round;
+}
+.zc-startup-mark {
+  width: 64px;
+  height: 64px;
+}
+@keyframes zc-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes zc-orbit {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══ Shell: regions are separated by value (rail < dock < workspace), with
+   only a faint contour where two planes meet. ═══ */
+.app-shell {
+  --rail-width: 240px;
+  display: grid;
+  grid-template-columns: var(--rail-width) 1fr minmax(280px, 312px);
+  grid-template-rows: 44px minmax(0, 1fr);
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--color-app);
+  transition: grid-template-columns 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.app-shell[data-rail="collapsed"] {
+  --rail-width: 56px;
+}
+
+.liquid-panel {
+  overflow: hidden;
+}
+
+/* Shell: the rail runs to the top edge and carries the brand; the
+   top bar spans the queue and details; the edges are faint value steps. */
+.shell-left {
+  grid-area: 1 / 1 / 3 / 2;
+  z-index: 20;
+  background: var(--color-rail);
+  border-right: 1px solid var(--color-edge);
+}
+.shell-header {
+  position: relative;
+  grid-area: 1 / 2 / 2 / 4;
+  z-index: 40;
+  background: var(--color-titlebar);
+  border-bottom: 1px solid var(--color-edge);
+}
+.shell-main {
+  grid-area: 2 / 2;
+  z-index: 10;
+  background: var(--color-workspace);
+}
+.shell-right,
+.shell-inspector {
+  grid-area: 2 / 3;
+  z-index: 30;
+  background: var(--color-dock);
+  border-left: 1px solid var(--color-edge);
+}
+
+/* Rail header: one button folds the panel. */
+.zc-rail-logo {
+  display: flex;
+  width: 100%;
+  height: 44px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  color: hsl(var(--text-secondary));
+  text-align: start;
+}
+.app-shell[data-rail="collapsed"] .zc-rail-logo {
+  justify-content: center;
+  padding: 4px 0;
+}
+.zc-rail-logo:hover {
+  background: var(--color-hover);
+  color: hsl(var(--text-primary));
+}
+.zc-rail-brand {
+  color: color-mix(in srgb, hsl(var(--text-primary)) 80%, hsl(var(--text-secondary)));
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.zc-rail-fold {
+  margin-inline-start: auto;
+  flex: none;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.zc-rail-logo:hover .zc-rail-fold,
+.zc-rail-logo:focus-visible .zc-rail-fold {
+  opacity: 0.7;
+}
+
+/* Search in the top bar. */
+.zc-search-slot {
+  position: absolute;
+  top: 50%;
+  left: calc(50vw - var(--rail-width));
+  width: min(432px, calc(100vw - 2 * var(--rail-width) - 380px));
+  transform: translate(-50%, -50%);
+  transition: left 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.zc-search:focus-visible {
+  border-color: hsl(var(--focus-ring));
+  background-color: hsl(var(--surface-1));
+  outline: 2px solid hsl(var(--focus-ring));
+  outline-offset: -2px;
+}
+.zc-search::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* ═══ Typography roles ═══ */
+@utility type-panel-header {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+@utility type-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@utility type-page-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+@utility type-control-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@utility type-helper {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@utility type-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* ═══ Scrollbars: quiet graphite thumb, larger hit area than the visible
+   idle thumb, brightens while the scroller is hovered or focused. ═══ */
+* {
+  scrollbar-color: hsl(var(--scroll-idle)) transparent;
+  scrollbar-width: thin;
+}
+@supports selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: auto;
+    scrollbar-width: auto;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: hsl(var(--scroll-idle));
+    background-clip: padding-box;
+  }
+  *:hover::-webkit-scrollbar-thumb,
+  *:focus-within::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: 2px;
+    background-color: hsl(var(--scroll-engaged));
+  }
+}
+
+/* ═══ Press: everything you can click gives a little under the pointer and
+   springs back once. One rule for the whole app; opt out with
+   data-press="none". Unlayered on purpose so it also carries the colour
+   transitions that utility classes would otherwise own. ═══ */
+:where(button, [role="button"], [data-press]):where(:not(:disabled, [aria-disabled="true"], [data-press="none"])) {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease,
+    scale var(--press-out) var(--ease-spring);
+}
+:where(button, [role="button"], [data-press]):where(:not(:disabled, [aria-disabled="true"], [data-press="none"])):active {
+  scale: var(--press-scale);
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease,
+    scale var(--press-in) var(--ease-standard);
+}
+/* Small icon buttons need a clearer give; wide rows and cards a gentler one. */
+:where([data-press="icon"]) { --press-scale: 0.92; }
+:where([data-press="wide"]) { --press-scale: 0.985; }
+@media (prefers-reduced-motion: reduce) {
+  :root { --press-scale: 1; }
+}
+:root[data-reduce-motion] { --press-scale: 1; }
+
+/* ═══ Primitives ═══ */
+@layer components {
+  .zc-btn {
+    display: inline-flex;
+    height: var(--control-md);
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .zc-btn:focus-visible {
+    outline-offset: -2px;
+  }
+  .zc-btn-sm {
+    height: var(--control-sm);
+    padding: 0 8px;
+  }
+  .zc-btn-lg {
+    height: var(--control-lg);
+    padding: 0 16px;
+    font-size: 13px;
+  }
+  /* The one filled colour on a screen: the action that moves the work on. */
+  .zc-btn-primary {
+    background: hsl(var(--accent));
+    color: hsl(var(--text-on-accent));
+  }
+  .zc-btn-primary:hover {
+    background: hsl(var(--accent-hover));
+  }
+  .zc-btn-secondary {
+    border-color: hsl(var(--border-subtle));
+    color: hsl(var(--text-secondary));
+  }
+  .zc-btn-secondary:hover {
+    border-color: hsl(var(--border-strong));
+    background: var(--color-hover);
+    color: hsl(var(--text-primary));
+  }
+  .zc-btn-ghost {
+    color: hsl(var(--text-secondary));
+  }
+  .zc-btn-ghost:hover {
+    background: var(--color-hover);
+    color: hsl(var(--text-primary));
+  }
+  .zc-btn-danger {
+    border-color: hsl(var(--danger-border));
+    color: hsl(var(--danger));
+  }
+  .zc-btn-danger:hover {
+    background: hsl(var(--danger-soft));
+  }
+  .zc-btn:disabled {
+    border-color: transparent;
+    background: hsl(var(--surface-2));
+    color: hsl(var(--text-disabled));
+    cursor: not-allowed;
+  }
+  .zc-btn-ghost:disabled,
+  .zc-btn-secondary:disabled {
+    background: transparent;
+    opacity: 0.5;
+  }
+
+  .zc-icon-btn {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    place-items: center;
+    border-radius: var(--radius-control);
+    color: hsl(var(--text-tertiary));
+  }
+  .zc-icon-btn:hover {
+    background: var(--color-hover);
+    color: hsl(var(--text-primary));
+  }
+
+  .zc-field {
+    width: 100%;
+    height: var(--control-md);
+    padding: 0 8px;
+    border: 1px solid hsl(var(--input-border));
+    border-radius: var(--radius-control);
+    background: hsl(var(--input-bg));
+    color: hsl(var(--text-primary));
+    font-size: 12px;
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+  .zc-field::placeholder {
+    color: hsl(var(--text-tertiary));
+  }
+  .zc-field:hover:not(:disabled) {
+    border-color: hsl(var(--border-strong));
+  }
+  .zc-field:focus-visible {
+    border-color: hsl(var(--focus-ring));
+    outline-offset: -2px;
+  }
+  .zc-field:disabled {
+    opacity: 0.5;
+  }
+  .zc-field::-webkit-search-cancel-button {
+    display: none;
+  }
+  select.zc-field {
+    appearance: none;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808A94' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 7px center;
+    background-size: 14px;
+    background-repeat: no-repeat;
+    cursor: pointer;
+  }
+
+  /* A choice among several. Unselected it is only a label with a hairline;
+     selected it gets the selection tint, never the action colour. */
+  .zc-chip {
+    height: 26px;
+    overflow: hidden;
+    border: 1px solid var(--color-separator);
+    border-radius: var(--radius-control);
+    color: hsl(var(--text-secondary));
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-align: center;
+    text-overflow: ellipsis;
+  }
+  .zc-chip:hover:not(:disabled) {
+    background: var(--color-hover);
+    color: hsl(var(--text-primary));
+  }
+  .zc-chip[aria-pressed="true"] {
+    border-color: var(--color-selected-border);
+    background: var(--color-selected);
+    color: hsl(var(--text-primary));
+  }
+  .zc-chip:disabled {
+    opacity: 0.5;
+  }
+
+  .zc-label {
+    color: var(--color-text-section);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Label on the left, value on the right: the value is what gets read. */
+  .zc-meta {
+    display: flex;
+    min-height: 22px;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .zc-meta > :first-child {
+    flex: none;
+    color: hsl(var(--text-tertiary));
+  }
+  .zc-meta > :last-child {
+    min-width: 0;
+    color: hsl(var(--text-primary));
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+}
+
+/* ═══ Form controls ═══ */
+.zc-range {
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.zc-range::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to right,
+    hsl(var(--accent-strong)) var(--fill, 50%),
+    hsl(var(--border-strong)) var(--fill, 50%)
+  );
+}
+.zc-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: 50%;
+  background: hsl(var(--text-secondary));
+  transition: background-color 150ms ease;
+}
+.zc-range:hover:not(:disabled)::-webkit-slider-thumb {
+  background: hsl(var(--text-primary));
+}
+.zc-range:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.zc-check {
+  appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid hsl(var(--border-strong));
+  background: hsl(var(--input-bg)) center / 12px no-repeat;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-standard), border-color 150ms var(--ease-standard);
+}
+.zc-check:hover {
+  border-color: hsl(var(--text-tertiary));
+}
+.zc-check:checked {
+  border-color: hsl(var(--accent));
+  background-color: hsl(var(--accent));
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+
+/* ═══ Desktop notification card (window `receipt`, page #/receipt). ═══ */
+html.zc-receipt-page,
+html.zc-receipt-page body,
+html.zc-receipt-page #root {
+  background: transparent !important;
+  overflow: hidden;
+}
+.zc-receipt {
+  /* 2px gutter: the window is slightly larger than the card (see receipt.rs). */
+  position: fixed;
+  inset: 2px;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border: 1px solid hsl(var(--border-subtle));
+  border-radius: 12px;
+  background: hsl(var(--surface-1));
+  color: hsl(var(--text-primary));
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  cursor: default;
+}
+.zc-receipt-brand {
+  margin-bottom: 12px;
+  font-family: var(--font-brand);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: hsl(var(--text-tertiary));
+}
+.zc-receipt-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.zc-receipt-icon {
+  display: grid;
+  flex: none;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 999px;
+  color: hsl(var(--success));
+  background: hsl(var(--success) / 0.12);
+}
+.zc-receipt--warning .zc-receipt-icon {
+  color: hsl(var(--warning));
+  background: hsl(var(--warning) / 0.12);
+}
+.zc-receipt--failure .zc-receipt-icon {
+  color: hsl(var(--danger));
+  background: hsl(var(--danger) / 0.12);
+}
+.zc-receipt-title {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zc-receipt-body {
+  margin-top: 4px;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  font-size: 12px;
+  line-height: 1.6;
+  color: hsl(var(--text-secondary));
+}
+
+/* ═══ Dialogs ═══ */
+.zc-dialog::backdrop {
+  background: hsl(var(--panel-overlay));
+  backdrop-filter: blur(2px);
+}
+.zc-dialog[open] {
+  animation: zc-dialog-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes zc-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* First video job: FFmpeg consent and download, above the queue. */
+@layer components {
+  .zc-engine-card {
+    display: flex;
+    gap: 12px;
+    margin: 0 16px 12px;
+    padding: 14px 16px;
+    border: 1px solid hsl(var(--border-subtle));
+    border-radius: var(--radius-card);
+    background: hsl(var(--surface-1));
+  }
+}
+
+/* Why the last action failed, above the queue. */
+@layer components {
+  .zc-error-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 16px 12px;
+    padding: 12px 12px 12px 14px;
+    border: 1px solid hsl(var(--danger-border));
+    border-radius: var(--radius-card);
+    background: hsl(var(--danger-soft));
+  }
+}
+
+/* ═══ Languages ═══
+   Other scripts: system fonts that carry them, and no spaced capitals
+   (letter spacing breaks Arabic joins and means nothing in CJK or Devanagari). */
+html[lang="ja"] { --font-main: "Inter Variable", "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; --font-heading: var(--font-main); }
+html[lang="ko"] { --font-main: "Inter Variable", "Malgun Gothic", "Segoe UI", sans-serif; --font-heading: var(--font-main); }
+html[lang="zh-Hans"] { --font-main: "Inter Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif; --font-heading: var(--font-main); }
+html[lang="hi"] { --font-main: "Inter Variable", "Nirmala UI", "Segoe UI", sans-serif; --font-heading: var(--font-main); }
+html[lang="ar"] { --font-main: "Segoe UI", "Tahoma", "Inter Variable", sans-serif; --font-heading: var(--font-main); }
+html:is([lang="ja"], [lang="ko"], [lang="zh-Hans"], [lang="hi"], [lang="ar"]) :is(.zc-label, .type-section-label, .zc-receipt-brand) {
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Right to left (Arabic): the shell regions keep their places (window buttons
+   stay top right, as in every Windows app); the text inside each runs right to left. */
+html[dir="rtl"] .app-shell { direction: ltr; }
+html[dir="rtl"] :is(.shell-left, .shell-main, .shell-inspector, .zc-search-slot, .zc-dialog) { direction: rtl; }

@@ -1,0 +1,6 @@
+# The Rust version CI and local builds use. Bump it on purpose, in its own
+# pull request, together with any new Clippy findings; keep the version in
+# .github/workflows/ci.yml the same.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]

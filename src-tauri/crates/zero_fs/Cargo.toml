@@ -1,0 +1,17 @@
+[package]
+name = "zero_fs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ZeroConverter filesystem safety primitives: root containment, atomic writes, temp workspaces"
+
+[dependencies]
+dunce = "1"
+serde = "1"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
