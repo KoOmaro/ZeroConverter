@@ -16,7 +16,7 @@ As a kid I renamed a video to `.mp3` and waited for it to become a song. ZeroCon
 - **Private:** no account, no uploads, no telemetry.
 
 <table><tr>
-<td><img src="docs/media/jpg1080.gif" alt="photo.png renamed to photo.jpg@1080"></td>
+<td><img src="docs/media/mp3.gif" alt="video.mp4 renamed to video.mp3, then played"></td>
 <td><img src="docs/media/dds.gif" alt="A folder of textures renamed to .dds"></td>
 </tr></table>
 
