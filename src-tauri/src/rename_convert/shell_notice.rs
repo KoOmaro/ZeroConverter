@@ -206,6 +206,10 @@ mod tests {
     /// not done by its end).
     #[test]
     fn the_wait_ends_when_the_rename_is_announced() {
+        // Shell notices need a signed-in desktop; CI runners have none.
+        if std::env::var_os("CI").is_some() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let old = dir.path().join("Holiday");
         let new = dir.path().join("Holiday.webp");
