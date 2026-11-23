@@ -4,7 +4,7 @@ This file explains the third-party components with terms beyond a plain notice (
 
 ## MP3 encoding: LAME (LGPL), built into the app
 
-ZeroConverter writes MP3 with the **LAME 3.100** encoder library. It is compiled into the application (static linking) through the Rust crates `mp3lame-encoder 0.2.2` and `mp3lame-sys 0.1.11` (both LGPL-3.0; LAME itself is LGPL-2.0-or-later). Owner decision (2026-11-13): MP3 output stays.
+ZeroConverter writes MP3 with the **LAME 3.100** encoder library. It is compiled into the application (static linking) through the Rust crates `mp3lame-encoder 0.2.2` and `mp3lame-sys 0.1.11` (both LGPL-3.0; LAME itself is LGPL-2.0-or-later).
 
 How the LGPL terms are met:
 
