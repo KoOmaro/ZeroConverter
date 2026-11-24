@@ -1,6 +1,6 @@
 [package]
 name = "zeroconverter-core"
-version = "0.1.0"
+version = "0.1.1"
 description = "ZeroConverter's conversion engine: formats, validation, jobs. No UI, no Tauri."
 authors = ["ZeroFoundry"]
 license = "MIT"

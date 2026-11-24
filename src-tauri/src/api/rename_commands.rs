@@ -14,6 +14,7 @@ pub struct RenameConvertStatus {
     pub autostart: bool,
     pub folders: Vec<WatchedFolder>,
     pub context_menu: bool,
+    pub keep_original: bool,
 }
 
 #[tauri::command]
@@ -24,6 +25,7 @@ pub fn rename_convert_status(app: AppHandle) -> RenameConvertStatus {
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         folders: state.folders(&app),
         context_menu: crate::settings::load(&app).context_menu,
+        keep_original: state.keep_original.load(Ordering::Relaxed),
     }
 }
 
@@ -104,6 +106,15 @@ pub fn rename_convert_set_enabled(app: AppHandle, enabled: bool) -> Result<(), S
     let saved = crate::settings::save(&app, |s| s.rename_convert = enabled);
     crate::tray::refresh(&app);
     saved
+}
+
+#[tauri::command]
+pub fn rename_convert_set_keep_original(app: AppHandle, enabled: bool) -> Result<(), String> {
+    // Applies now either way; the error says it will not survive a restart.
+    rename_convert::state(&app)
+        .keep_original
+        .store(enabled, Ordering::Relaxed);
+    crate::settings::save(&app, |s| s.keep_original = enabled)
 }
 
 #[tauri::command]

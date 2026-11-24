@@ -107,13 +107,14 @@ const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   <h3 className="mb-5 text-[18px] font-semibold tracking-[-0.01em]">{children}</h3>
 );
 
-const Row: React.FC<{ title: string; description?: string; control: React.ReactNode; htmlFor?: string }> = ({
+const Row: React.FC<{ title: string; description?: string; control: React.ReactNode; htmlFor?: string; dimmed?: boolean }> = ({
   title,
   description,
   control,
   htmlFor,
+  dimmed,
 }) => (
-  <div className="flex items-center justify-between gap-6 border-b border-border-layout py-3.5 last:border-b-0">
+  <div className={`flex items-center justify-between gap-6 border-b border-border-layout py-3.5 transition-opacity duration-150 last:border-b-0 ${dimmed ? "opacity-50" : ""}`}>
     <div className="min-w-0">
       <label htmlFor={htmlFor} className="block text-[13px] font-medium text-text-primary">{title}</label>
       {description && <p className="mt-0.5 text-[12px] leading-relaxed text-text-tertiary">{description}</p>}
@@ -178,15 +179,33 @@ const GeneralSection: React.FC = () => {
       <Row
         htmlFor="set-rename"
         title={t("settings.renameTitle")}
-        description={t("settings.renameDesc", { from: "photo.png", to: "photo.webp", folder: "Holiday.webp" })}
+        description={
+          rename.keepOriginal
+            ? t("settings.renameDescKeep", { from: "photo.png", to: "photo.webp", folder: "Holiday.webp" })
+            : t("settings.renameDesc", { from: "photo.png", to: "photo.webp", folder: "Holiday.webp" })
+        }
         control={<Switch id="set-rename" checked={!!rename.enabled} disabled={rename.enabled === null} onChange={rename.setEnabled} />}
+      />
+      <Row
+        htmlFor="set-keep-original"
+        title={t("settings.keepOriginalTitle")}
+        description={t("settings.keepOriginalDesc")}
+        dimmed={rename.enabled === false}
+        control={
+          <Switch
+            id="set-keep-original"
+            checked={!!rename.keepOriginal}
+            disabled={rename.keepOriginal === null}
+            onChange={rename.setKeepOriginal}
+          />
+        }
       />
       <div className={`border-b border-border-layout py-3.5 transition-opacity duration-150 ${rename.enabled === false ? "opacity-50" : ""}`}>
         <h4 className="text-[13px] font-medium text-text-primary">{t("settings.suffixTitle")}</h4>
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12px]">
           {[
             ["photo.webp+", t("settings.suffixQuality")],
-            ["photo.webp&", t("settings.suffixKeep")],
+            ["photo.webp&", rename.keepOriginal ? t("settings.suffixRecycle") : t("settings.suffixKeep")],
             ["photo.webp@1080", t("settings.suffixSize")],
           ].map(([example, meaning]) => (
             <React.Fragment key={example}>

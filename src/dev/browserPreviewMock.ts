@@ -40,6 +40,7 @@ const idleSummary = { status: "Idle", total: 0, queued: 0, running: 0, completed
 // FFmpeg download stand-in: ~8 s of fake progress, stoppable with Cancel.
 const FFMPEG_BYTES = 167_647_897;
 let ffmpegInstalled = false;
+let keepOriginal = false;
 let extraFolders: string[] = [];
 let ffmpegCancelled = false;
 
@@ -84,7 +85,7 @@ export function installBrowserPreviewMock() {
   mockIPC((cmd, args) => {
     switch (cmd) {
       case "get_app_status":
-        return { engine: "zero-core", version: "0.1.0" };
+        return { engine: "zero-core", version: "0.1.1" };
       case "get_app_capabilities":
         return capabilities;
       case "get_queue_status":
@@ -102,11 +103,15 @@ export function installBrowserPreviewMock() {
           enabled: true,
           autostart: false,
           context_menu: true,
+          keep_original: keepOriginal,
           folders: [
             ...["Desktop", "Downloads", "Documents", "Pictures", "Videos", "Music"].map((f) => ({ path: `C:\\Users\\artist\\${f}`, builtin: true })),
             ...extraFolders.map((path) => ({ path, builtin: false })),
           ],
         };
+      case "rename_convert_set_keep_original":
+        keepOriginal = (args as { enabled: boolean }).enabled;
+        return null;
       case "rename_convert_add_folder": {
         const path = (args as { path: string }).path;
         if (!extraFolders.includes(path)) extraFolders.push(path);
@@ -149,7 +154,7 @@ export function installBrowserPreviewMock() {
       case "receipt_current": {
         // What the Rust side sends for a finished rename, worded from the same catalog.
         const nat = (key: string, o?: Record<string, string>) => i18n.t(`native.rename.${key}`, o);
-        return { tone: "success", title: "photo.png → photo.webp", body: `${nat("converted", { time: "106 ms" })}${i18n.t("native.sentenceJoin")}${nat("inBin")}` };
+        return { tone: "success", title: "photo.png → photo.webp", body: `${nat("converted", { time: "106 ms" })}${i18n.t("native.sentenceJoin")}${nat(keepOriginal ? "keptOriginal" : "inBin")}` };
       }
       default:
         return null;

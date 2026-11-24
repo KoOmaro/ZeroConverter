@@ -117,6 +117,9 @@ pub fn run() {
                 settings.rename_convert,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            rename_convert
+                .keep_original
+                .store(settings.keep_original, std::sync::atomic::Ordering::Relaxed);
             rename_convert.start(handle.clone());
             crate::updater::start(&handle);
             // Also when off: a menu left over from before is taken away.
@@ -179,6 +182,7 @@ pub fn run() {
             api::rename_commands::rename_convert_status,
             api::language_commands::set_ui_language,
             api::rename_commands::rename_convert_set_enabled,
+            api::rename_commands::rename_convert_set_keep_original,
             api::rename_commands::rename_convert_set_autostart,
             api::rename_commands::rename_convert_add_folder,
             api::rename_commands::rename_convert_remove_folder,

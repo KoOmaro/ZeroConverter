@@ -12,6 +12,8 @@ export interface RenameConvertStatus {
   folders: WatchedFolder[];
   /** "Convert with ZeroConverter" in Explorer's right-click menu. */
   context_menu: boolean;
+  /** Keep the original file by default on rename-to-convert. */
+  keep_original: boolean;
 }
 
 export interface QuickJobInfo {
@@ -34,6 +36,7 @@ export interface QuickOptions {
 export const renameGateway = {
   status: () => transportInvoke<RenameConvertStatus>("rename_convert_status"),
   setEnabled: (enabled: boolean) => transportInvoke<void>("rename_convert_set_enabled", { enabled }),
+  setKeepOriginal: (enabled: boolean) => transportInvoke<void>("rename_convert_set_keep_original", { enabled }),
   setAutostart: (enabled: boolean) => transportInvoke<void>("rename_convert_set_autostart", { enabled }),
   addFolder: (path: string) => transportInvoke<void>("rename_convert_add_folder", { path }),
   removeFolder: (path: string) => transportInvoke<void>("rename_convert_remove_folder", { path }),

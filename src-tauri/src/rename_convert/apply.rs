@@ -36,6 +36,20 @@ impl QuickOptions {
     }
 }
 
+/// Snapshot of a file's volume/index/size/mtime and head/tail byte hash captured
+/// when a rename event is admitted, so queued (`+`) and restore paths never act
+/// on another file that later took the watched path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity(FileId);
+
+pub(crate) fn capture_identity(path: &Path) -> Option<FileIdentity> {
+    file_id(path).map(FileIdentity)
+}
+
+pub(crate) fn matches_identity(path: &Path, id: FileIdentity) -> bool {
+    still_ours(path, Some(id.0))
+}
+
 #[derive(Debug, Clone)]
 pub struct Job {
     /// Where the file is now (the name the user typed, `+` included).
@@ -53,6 +67,98 @@ pub struct Job {
     /// From the right-click menu: a copy, not a rename. The rename-to-convert
     /// switch does not stop it; only quitting does.
     pub from_menu: bool,
+    /// When the rename event arrived (`None` for menu copies, folder jobs, and
+    /// tests). Used to wait for Explorer's shell notice before moving
+    /// `current` away.
+    pub renamed_at: Option<Instant>,
+    /// Identity captured when the rename event was accepted (`None` in unit
+    /// tests that construct `Job` directly without an admission step).
+    pub admitted_id: Option<FileIdentity>,
+}
+
+/// How much of `budget` remains from `since` at `now`, or `None` once that
+/// window has already passed.
+pub(crate) fn remaining_wait(since: Instant, now: Instant, budget: Duration) -> Option<Duration> {
+    let elapsed = now.saturating_duration_since(since);
+    budget.checked_sub(elapsed).filter(|d| !d.is_zero())
+}
+
+/// Time left to wait for Explorer's file-rename notice on `job` at `now`,
+/// or `None` when no wait applies (menu copy, in-place job, no event time, or
+/// `EXPLORER_RENAME_WAIT` already elapsed).
+pub(crate) fn file_notice_wait(job: &Job, now: Instant) -> Option<Duration> {
+    if job.from_menu || same_name(&job.current, &job.original) {
+        return None;
+    }
+    let event_at = job.renamed_at?;
+    remaining_wait(event_at, now, super::EXPLORER_RENAME_WAIT)
+}
+
+/// Runs the bounded wait for Explorer's `SHCNE_RENAMEITEM` notice in parallel
+/// with conversion and consumes it once before the first disk move of
+/// `job.current`.
+struct ExplorerSettler {
+    pending: Option<(super::shell_notice::PendingWait, Instant)>,
+}
+
+impl ExplorerSettler {
+    fn start(job: &Job) -> Self {
+        let Some(wait) = file_notice_wait(job, Instant::now()) else {
+            return Self { pending: None };
+        };
+        let Some(event_at) = job.renamed_at else {
+            return Self { pending: None };
+        };
+        let pending = super::shell_notice::start_rename_wait(
+            &job.current,
+            wait,
+            super::shell_notice::RenameKind::File,
+        );
+        Self {
+            pending: Some((pending, event_at)),
+        }
+    }
+
+    fn for_path(path: &Path, event_at: Instant) -> Self {
+        let Some(wait) = remaining_wait(event_at, Instant::now(), super::EXPLORER_RENAME_WAIT)
+        else {
+            return Self { pending: None };
+        };
+        let pending = super::shell_notice::start_rename_wait(
+            path,
+            wait,
+            super::shell_notice::RenameKind::File,
+        );
+        Self {
+            pending: Some((pending, event_at)),
+        }
+    }
+
+    #[cfg(test)]
+    fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn wait_once(&mut self) {
+        let Some((pending, event_at)) = self.pending.take() else {
+            return;
+        };
+        let (heard, done_at) = pending.wait();
+        super::debug(&format!(
+            "file notice heard={heard} after {:?}",
+            done_at.saturating_duration_since(event_at)
+        ));
+        if heard {
+            if let Some(settle) = remaining_wait(done_at, Instant::now(), super::EXPLORER_SETTLE) {
+                std::thread::sleep(settle);
+            }
+        }
+    }
+}
+
+/// Waits for Explorer's rename notice before moving a file back directly.
+pub(crate) fn wait_for_file_notice(path: &Path, event_at: Instant) {
+    ExplorerSettler::for_path(path, event_at).wait_once();
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +166,17 @@ pub struct Done {
     pub final_path: PathBuf,
     pub elapsed: Duration,
     pub original_recycled: bool,
+    /// Actual path of a surviving original (kept intentionally, or left on disk
+    /// when sending to the Recycle Bin failed).
+    pub kept_original: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct Failure {
+    pub error: AppError,
+    /// True only when `restore_name` actually moved `job.current` back to
+    /// `job.original` after verifying file identity.
+    pub restored: bool,
 }
 
 /// Converts and swaps. On failure the file is renamed back to its original
@@ -81,34 +198,80 @@ pub fn run_unless(
     options: &QuickOptions,
     stop: &dyn Fn() -> bool,
 ) -> Result<Done, AppError> {
+    run_outcome(job, registry, options, stop).map_err(|f| f.error)
+}
+
+/// Like [`run_unless`], also reporting whether `job.current` was actually
+/// restored to `job.original` on failure.
+pub fn run_outcome(
+    job: &Job,
+    registry: &ConverterRegistry,
+    options: &QuickOptions,
+    stop: &dyn Fn() -> bool,
+) -> Result<Done, Failure> {
     let started = Instant::now();
+    // Start listening for Explorer's rename notice right away so the wait
+    // overlaps with conversion rather than delaying fast-enough conversions.
+    let mut settler = ExplorerSettler::start(job);
     // Which file this is: if something else is put under the name meanwhile,
     // that file is left alone (not swapped, binned or renamed back).
-    let mut identity = None;
-    let result = wait_until_readable(&job.current).and_then(|()| {
+    let mut identity = job.admitted_id.map(|id| id.0);
+    let result = wait_until_readable(&job.current, stop).and_then(|()| {
         super::debug(&format!("readable after {:?}", started.elapsed()));
         if stop() {
+            if identity.is_none() {
+                identity = file_id(&job.current);
+            }
             return Err(AppError::Cancelled);
         }
-        identity = file_id(&job.current);
-        convert_and_swap(job, registry, options, identity, stop)
+        let now_id = file_id(&job.current);
+        if let Some(expected) = identity {
+            if now_id != Some(expected) {
+                return Err(AppError::Io(format!(
+                    "{} was replaced or changed by another program before converting; nothing was changed",
+                    file_name(&job.current)
+                )));
+            }
+        } else {
+            identity = now_id;
+        }
+        convert_and_swap(job, registry, options, identity, stop, &mut settler)
     });
-    // Never identified (it was never touched), or still the same file: it
-    // gets its old name back. A file that took the name is left alone.
-    if result.is_err() && (identity.is_none() || still_ours(&job.current, identity)) {
-        restore_name(job);
+    match result {
+        Ok((recycled, kept_original)) => Ok(Done {
+            final_path: job.final_path.clone(),
+            elapsed: started.elapsed(),
+            original_recycled: recycled,
+            kept_original,
+        }),
+        Err(error) => {
+            let matches_expected = |id: Option<FileId>| match id {
+                Some(expected) => still_ours(&job.current, Some(expected)),
+                None => file_id(&job.current).is_none(),
+            };
+            let restored = if matches_expected(identity) {
+                settler.wait_once();
+                matches_expected(identity) && restore_name(job)
+            } else {
+                false
+            };
+            Err(Failure { error, restored })
+        }
     }
-    result.map(|recycled| Done {
-        final_path: job.final_path.clone(),
-        elapsed: started.elapsed(),
-        original_recycled: recycled,
-    })
 }
 
 /// Puts the file back under the name it had before the rename, never over
 /// a file that took that name meanwhile (then it keeps its current name).
-pub fn restore_name(job: &Job) {
-    let _ = zero_fs::rename_no_replace(&job.current, &job.original);
+pub fn restore_name(job: &Job) -> bool {
+    zero_fs::rename_no_replace(&job.current, &job.original).is_ok()
+}
+
+/// Restores `job.current` to `job.original` only when `job.admitted_id` still
+/// matches the file currently at `job.current`.
+pub fn restore_verified(job: &Job) -> bool {
+    job.admitted_id
+        .is_some_and(|id| matches_identity(&job.current, id))
+        && restore_name(job)
 }
 
 /// Which file this is: what the file system says (volume, index, size, last
@@ -153,7 +316,8 @@ fn convert_and_swap(
     options: &QuickOptions,
     identity: Option<FileId>,
     stop: &dyn Fn() -> bool,
-) -> Result<bool, AppError> {
+    settler: &mut ExplorerSettler,
+) -> Result<(bool, Option<PathBuf>), AppError> {
     // Every later step checks that the file is still this one. With no way
     // to tell, nothing is touched.
     if identity.is_none() {
@@ -188,6 +352,7 @@ fn convert_and_swap(
         options,
         identity,
         stop,
+        settler,
         &work.path,
         &source,
         &mut original_at,
@@ -200,7 +365,8 @@ fn convert_and_swap(
         Some(at) => !still_ours(at, identity),
     };
     if !only_copy {
-        return result;
+        let kept = original_at.filter(|at| job.keep_original || still_ours(at, identity));
+        return result.map(|recycled| (recycled, kept));
     }
     // Something else took the original's place (another program, or a queue
     // job writing there): put the original back in the folder, visibly.
@@ -232,6 +398,7 @@ fn convert_then_swap(
     options: &QuickOptions,
     identity: Option<FileId>,
     stop: &dyn Fn() -> bool,
+    settler: &mut ExplorerSettler,
     work: &Path,
     source: &Path,
     original_at: &mut Option<PathBuf>,
@@ -275,6 +442,9 @@ fn convert_then_swap(
     if !result.success {
         return Err(AppError::Execute(result.message));
     }
+    // Wait for Explorer to finish its own rename before checking stop/desktop/swap
+    // or moving `job.current` away.
+    settler.wait_once();
     if stop() {
         return Err(AppError::Cancelled);
     }
@@ -397,13 +567,16 @@ fn recycle(path: &Path) -> bool {
 }
 
 /// Explorer and download managers may still hold the file for a moment.
-fn wait_until_readable(path: &Path) -> Result<(), AppError> {
+fn wait_until_readable(path: &Path, stop: &dyn Fn() -> bool) -> Result<(), AppError> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match std::fs::OpenOptions::new().read(true).open(path) {
             Ok(_) => return Ok(()),
             Err(e) if Instant::now() < deadline => {
                 let _ = e;
+                if stop() {
+                    return Err(AppError::Cancelled);
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => return Err(AppError::Io(format!("File is in use: {e}"))),
@@ -601,6 +774,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let done = run(&job, &registry(), &QuickOptions::default()).unwrap();
         assert_eq!(done.final_path, current);
@@ -633,6 +808,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         assert!(run(&job, &registry(), &QuickOptions::default()).is_err());
         assert_eq!(std::fs::read(&original).unwrap(), b"someone else's");
@@ -656,6 +833,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let result = run_unless(&job, &registry(), &QuickOptions::default(), &|| true);
         assert!(matches!(result, Err(AppError::Cancelled)));
@@ -681,6 +860,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let calls = std::cell::Cell::new(0);
         let stop = || {
@@ -803,6 +984,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         assert!(run(&job, &registry(), &QuickOptions::default()).is_err());
         assert!(original.exists());
@@ -828,6 +1011,8 @@ mod tests {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         run(&job, &registry(), &QuickOptions::with_quality(70)).unwrap();
         assert_eq!(
@@ -877,6 +1062,8 @@ mod marks {
             keep_original: false,
             max_size: Some(32),
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         run(&job, &registry(), &QuickOptions::default()).unwrap();
         let out = image::open(dir.path().join("photo.png")).unwrap();
@@ -906,6 +1093,8 @@ mod marks {
             keep_original: true,
             max_size: Some(32),
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let done = run(&job, &registry(), &QuickOptions::default()).unwrap();
         let original = image::open(dir.path().join("photo.png")).unwrap();
@@ -927,6 +1116,8 @@ mod marks {
             keep_original: true,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let done = run(&job, &registry(), &QuickOptions::default()).unwrap();
         assert!(!done.original_recycled);
@@ -954,6 +1145,8 @@ mod marks {
             keep_original: false,
             max_size: Some(100),
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         run(&job, &registry(), &QuickOptions::default()).unwrap();
         let out = image::image_dimensions(dir.path().join("photo.jpg")).unwrap();
@@ -974,6 +1167,8 @@ mod marks {
                 keep_original: keep,
                 max_size: None,
                 from_menu: false,
+                renamed_at: None,
+                admitted_id: None,
             };
             run(&job, &registry(), &QuickOptions::default()).unwrap();
             assert!(dir.path().join("a.webp").exists());
@@ -1016,8 +1211,203 @@ mod local_media {
             keep_original: false,
             max_size: None,
             from_menu: false,
+            renamed_at: None,
+            admitted_id: None,
         };
         let res = run(&job, &r, &QuickOptions::default());
         assert!(res.is_ok(), "{res:?}");
+    }
+}
+
+#[cfg(test)]
+mod notice_wait_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_job(from_menu: bool, same_names: bool, renamed_at: Option<Instant>) -> Job {
+        let original = PathBuf::from("C:/a/photo.png");
+        let current = if same_names {
+            original.clone()
+        } else {
+            PathBuf::from("C:/a/photo.webp&")
+        };
+        Job {
+            current,
+            original,
+            final_path: PathBuf::from("C:/a/photo.webp"),
+            source: "png".into(),
+            target: "webp".into(),
+            keep_original: true,
+            max_size: None,
+            from_menu,
+            renamed_at,
+            admitted_id: None,
+        }
+    }
+
+    #[test]
+    fn remaining_wait_bounds_and_cutoff() {
+        let t0 = Instant::now();
+        let budget = Duration::from_millis(1500);
+        assert_eq!(remaining_wait(t0, t0, budget), Some(budget));
+        assert_eq!(
+            remaining_wait(t0, t0 + Duration::from_millis(400), budget),
+            Some(Duration::from_millis(1100))
+        );
+        assert_eq!(remaining_wait(t0, t0 + budget, budget), None);
+        assert_eq!(
+            remaining_wait(t0, t0 + Duration::from_millis(2000), budget),
+            None
+        );
+        assert_eq!(
+            remaining_wait(t0 + Duration::from_millis(100), t0, budget),
+            Some(budget)
+        );
+        assert_eq!(remaining_wait(t0, t0, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn file_notice_wait_only_applies_to_fresh_explorer_renames() {
+        let now = Instant::now();
+        let fresh = now;
+        let expired = now.checked_sub(Duration::from_secs(5));
+
+        assert_eq!(
+            file_notice_wait(&test_job(true, false, Some(fresh)), now),
+            None
+        );
+        assert_eq!(
+            file_notice_wait(&test_job(false, true, Some(fresh)), now),
+            None
+        );
+        assert_eq!(file_notice_wait(&test_job(false, false, None), now), None);
+
+        let mut case_only = test_job(false, false, Some(fresh));
+        case_only.current = PathBuf::from("C:/a/PHOTO.PNG");
+        assert_eq!(file_notice_wait(&case_only, now), None);
+
+        assert_eq!(
+            file_notice_wait(&test_job(false, false, Some(fresh)), now),
+            Some(super::super::EXPLORER_RENAME_WAIT)
+        );
+        if let Some(old) = expired {
+            assert_eq!(
+                file_notice_wait(&test_job(false, false, Some(old)), now),
+                None
+            );
+        }
+        assert_eq!(
+            file_notice_wait(
+                &test_job(false, false, Some(fresh)),
+                fresh + super::super::EXPLORER_RENAME_WAIT
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn expired_event_time_skips_notice_wait_on_swap_and_failure_restore() {
+        let Some(old) = Instant::now().checked_sub(Duration::from_secs(5)) else {
+            return;
+        };
+        let mut r = ConverterRegistry::new();
+        r.register(
+            crate::core::conversion::types::AssetFamily::Image,
+            Arc::new(crate::core::handlers::image::ImageConverterHandler),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("photo.png");
+        let current = dir.path().join("photo.webp&");
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 30, 30, 255]));
+        img.save_with_format(&current, image::ImageFormat::Png)
+            .unwrap();
+        let job = Job {
+            current: current.clone(),
+            original: original.clone(),
+            final_path: dir.path().join("photo.webp"),
+            source: "png".into(),
+            target: "webp".into(),
+            keep_original: true,
+            max_size: None,
+            from_menu: false,
+            renamed_at: Some(old),
+            admitted_id: None,
+        };
+        assert!(!ExplorerSettler::start(&job).has_pending());
+
+        run(&job, &r, &QuickOptions::default()).unwrap();
+        assert!(original.exists());
+        assert!(dir.path().join("photo.webp").exists());
+
+        // Broken file restores name without waiting when the event window already passed.
+        let bad_dir = tempfile::tempdir().unwrap();
+        let bad_orig = bad_dir.path().join("broken.png");
+        let bad_cur = bad_dir.path().join("broken.webp&");
+        std::fs::write(&bad_cur, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+        let bad_job = Job {
+            current: bad_cur.clone(),
+            original: bad_orig.clone(),
+            final_path: bad_dir.path().join("broken.webp"),
+            source: "png".into(),
+            target: "webp".into(),
+            keep_original: true,
+            max_size: None,
+            from_menu: false,
+            renamed_at: Some(old),
+            admitted_id: None,
+        };
+        assert!(!ExplorerSettler::for_path(&bad_cur, old).has_pending());
+
+        let failure = run_outcome(&bad_job, &r, &QuickOptions::default(), &|| false).unwrap_err();
+        assert!(failure.restored);
+        assert!(bad_orig.exists());
+        assert!(!bad_cur.exists());
+    }
+
+    #[test]
+    fn queued_job_rejects_and_never_moves_or_bins_a_substitute_file() {
+        let mut r = ConverterRegistry::new();
+        r.register(
+            crate::core::conversion::types::AssetFamily::Image,
+            Arc::new(crate::core::handlers::image::ImageConverterHandler),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("photo.png");
+        let current = dir.path().join("photo.webp+");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 30, 30, 255]))
+            .save_with_format(&current, image::ImageFormat::Png)
+            .unwrap();
+        let admitted_id = capture_identity(&current);
+        assert!(admitted_id.is_some());
+
+        // While the `+` window is open, another program replaces `photo.webp+`
+        // with a different valid PNG.
+        std::fs::remove_file(&current).unwrap();
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([10, 220, 40, 255]))
+            .save_with_format(&current, image::ImageFormat::Png)
+            .unwrap();
+        let substitute_bytes = std::fs::read(&current).unwrap();
+
+        let job = Job {
+            current: current.clone(),
+            original: original.clone(),
+            final_path: dir.path().join("photo.webp"),
+            source: "png".into(),
+            target: "webp".into(),
+            keep_original: false,
+            max_size: None,
+            from_menu: false,
+            renamed_at: None,
+            admitted_id,
+        };
+
+        assert!(!restore_verified(&job));
+        let failure = run_outcome(&job, &r, &QuickOptions::default(), &|| false).unwrap_err();
+        assert!(!failure.restored);
+        assert_eq!(std::fs::read(&current).unwrap(), substitute_bytes);
+        assert!(!original.exists());
+        assert!(!dir.path().join("photo.webp").exists());
     }
 }

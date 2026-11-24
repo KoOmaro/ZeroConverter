@@ -12,6 +12,9 @@ pub struct Settings {
     /// Folders the user added for rename-to-convert, on top of their own
     /// Desktop, Downloads, Documents, Pictures, Videos and Music.
     pub rename_folders: Vec<String>,
+    /// Keep the original file by default on rename-to-convert (`&` reverses it).
+    #[serde(default)]
+    pub keep_original: bool,
     /// "Convert with ZeroConverter" in Explorer's right-click menu.
     pub context_menu: bool,
     /// The "still running in the tray" hint was shown once.
@@ -34,6 +37,7 @@ impl Default for Settings {
         Self {
             rename_convert: true,
             rename_folders: Vec::new(),
+            keep_original: false,
             context_menu: true,
             tray_hint_shown: false,
             notify: true,
@@ -111,13 +115,20 @@ mod tests {
 
     #[test]
     fn missing_file_uses_defaults() {
-        assert!(parse(None).rename_convert);
+        let s = parse(None);
+        assert!(s.rename_convert);
+        assert!(!s.keep_original);
     }
 
     #[test]
     fn damaged_file_keeps_rename_convert_off() {
         let damaged = parse(Some(b"{ not json"));
-        assert!(!damaged.rename_convert && !damaged.context_menu && !damaged.auto_update);
+        assert!(
+            !damaged.rename_convert
+                && !damaged.context_menu
+                && !damaged.auto_update
+                && !damaged.keep_original
+        );
         assert!(!parse(Some(br#"{"rename_convert": "yes"}"#)).rename_convert);
     }
 
@@ -133,5 +144,14 @@ mod tests {
     fn saved_choice_is_kept() {
         assert!(!parse(Some(br#"{"rename_convert": false}"#)).rename_convert);
         assert!(parse(Some(br#"{"notify": false}"#)).rename_convert);
+    }
+
+    #[test]
+    fn old_settings_without_keep_original_default_to_false() {
+        let s = parse(Some(br#"{"rename_convert": true, "notify": false}"#));
+        assert!(!s.keep_original);
+        assert!(s.rename_convert);
+        assert!(!s.notify);
+        assert!(parse(Some(br#"{"keep_original": true}"#)).keep_original);
     }
 }

@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 pub struct Rename {
     pub old: PathBuf,
     pub new: PathBuf,
+    pub at: std::time::Instant,
 }
 
 /// Folders where renames are machine noise, never a person converting a file:
@@ -410,6 +411,7 @@ mod platform {
                                 let _ = tx.send(Rename {
                                     old,
                                     new: PathBuf::from(full),
+                                    at: std::time::Instant::now(),
                                 });
                             }
                         }

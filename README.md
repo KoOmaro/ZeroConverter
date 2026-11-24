@@ -11,7 +11,7 @@ As a kid I renamed a video to `.mp3` and waited for it to become a song. ZeroCon
 
 - **Rename to convert:** `photo.png` → `photo.webp`, `texture.png` → `texture.dds`, `song.wav` → `song.mp3`.
 - **Whole folders:** rename a folder to `Album.jpg` and every file inside is converted. The folder keeps its name.
-- **Little extras in the name:** `photo.jpg@1080` resizes, `photo.webp&` keeps the original, `photo.webp+` asks for quality first.
+- **Little extras in the name:** `photo.jpg@1080` resizes, `photo.webp&` keeps the original (or sends it to the Recycle Bin when **Keep the original file** is on in Settings), `photo.webp+` asks for quality first.
 - **An app window too:** drop in a pile of files, pick a format, watch the queue.
 - **Private:** no account, no uploads, no telemetry.
 
@@ -70,10 +70,11 @@ Rename a file's extension in Explorer to a format ZeroConverter can write, and i
 
 - **Anywhere:** all fixed drives are watched. Outside the folders you mark as always-on in Settings, a rename only counts when a file manager is the window in front, so programs renaming their own files are left alone.
 - **Marks** you can add to the new name, in any order:
-  - `&` keeps the original file: `photo.webp&`
+  - `&` keeps the original file, or sends it to the Recycle Bin when **Keep the original file** is on in Settings: `photo.webp&`
   - `@N` limits the longer side to N pixels (images): `photo.webp@512`
   - `+` opens a small window for quality and size first: `photo.webp+`
 - **Folders:** rename a folder to `Album.webp` and the files inside it are converted (up to 2,000); the folder keeps its name.
+- **Hidden extensions:** works when Explorer hides file extensions.
 - **Right-click menu:** a per-user **ZeroConverter** submenu on supported files, no admin rights needed. It can be turned off in Settings and is removed on uninstall.
 
 3D format conversion is out of scope for now. Images over 100 megapixels are not previewed in the queue.

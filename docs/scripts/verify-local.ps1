@@ -48,7 +48,7 @@ Invoke-Checked $rust cargo @('test', '--workspace', '--no-fail-fast', '--locked'
 Invoke-Checked $rust cargo @('check', '-p', 'zeroconverter-core', '-p', 'zeroconverter-cli', '--no-default-features', '--locked')
 if (-not $SkipSecretScan) {
     # History scan; Gitleaks version and redacted report should be preserved privately.
-    Invoke-Checked $root gitleaks @('git', '--redact', '--source', '.')
+    Invoke-Checked $root gitleaks @('git', '--redact', '.')
 } else {
     Write-Warning 'SKIPPED: all-history secret scan; NOT valid for publication'
 }

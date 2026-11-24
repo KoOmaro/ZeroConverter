@@ -28,23 +28,31 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 
 static KNOWN_EXTENSIONS: OnceLock<HashSet<String>> = OnceLock::new();
+static DEBUG_START: OnceLock<std::time::Instant> = OnceLock::new();
 
 /// A folder conversion refuses beyond this many files: renaming a whole
 /// library by accident should not send thousands of originals to the bin.
 const MAX_FOLDER_FILES: usize = 2_000;
 
-/// How long a renamed folder waits for Explorer to announce that rename
-/// before it gets its name back. Explorer's notice comes 0.2 to 0.6 s after
+/// Number of sniff attempts on a rename before treating read failures as unreadable.
+const SNIFF_ATTEMPTS: usize = 7;
+
+/// Delay between transient sniff retries (~300 ms max across 6 waits).
+const SNIFF_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// How long a renamed folder or file waits for Explorer to announce that
+/// rename before moving it away. Explorer's notice comes 0.2 to 0.6 s after
 /// the rename; 1.5 s after it Explorer is done even when no notice was seen.
-const EXPLORER_RENAME_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+pub(crate) const EXPLORER_RENAME_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// The pause after Explorer's notice. Renamed back with no pause, about one
 /// rename in ten on the Desktop still got the error box.
-const EXPLORER_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+pub(crate) const EXPLORER_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 pub struct RenameConvert {
     registry: Arc<ConverterRegistry>,
     pub enabled: AtomicBool,
+    pub keep_original: AtomicBool,
     /// The app is closing (Quit, or an update): no file is swapped any more.
     quitting: AtomicBool,
     in_flight: Mutex<HashSet<PathBuf>>,
@@ -122,6 +130,7 @@ pub struct QuickJobInfo {
 
 impl RenameConvert {
     pub fn new(registry: Arc<ConverterRegistry>) -> Arc<Self> {
+        let _ = DEBUG_START.get_or_init(std::time::Instant::now);
         let mut known = HashSet::new();
         for family in [AssetFamily::Image, AssetFamily::Audio, AssetFamily::Video] {
             if let Some(h) = registry.get_handler(&family) {
@@ -135,6 +144,7 @@ impl RenameConvert {
         Arc::new(Self {
             registry,
             enabled: AtomicBool::new(true),
+            keep_original: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             in_flight: Mutex::new(HashSet::new()),
             waiting: Mutex::new(HashMap::new()),
@@ -167,13 +177,20 @@ impl RenameConvert {
             self.handle_folder(app, &event);
             return;
         }
-        // Explorer may still hold the file for a moment after the rename.
-        let content = (0..20).find_map(|_| {
-            crate::core::sniff::sniff_file(&event.new).or_else(|| {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                None
-            })
+        if !rule::may_need_sniff(&event.old, &event.new, |id| self.known(id)) {
+            return;
+        }
+        // Explorer or antivirus may still hold the file for a moment after the rename.
+        let content = retry_read(
+            SNIFF_ATTEMPTS,
+            SNIFF_RETRY_DELAY,
+            || crate::core::sniff::try_sniff_file(&event.new),
+            std::thread::sleep,
+        )
+        .map_or(rule::Content::Unreadable, |kind| {
+            kind.map_or(rule::Content::Unknown, rule::Content::Known)
         });
+        let admitted_id = apply::capture_identity(&event.new);
         debug(&format!("event {:?} content={content:?}", event));
         let decision = rule::decide(
             &event.old,
@@ -185,21 +202,23 @@ impl RenameConvert {
         debug(&format!("decision {decision:?}"));
         match decision {
             Decision::Ignore => {}
-            Decision::Restore => restore(&event.new, &event.old),
-            Decision::Unsupported { source, target } => {
-                restore(&event.new, &event.old);
-                notify(
-                    app,
-                    Tone::Warning,
-                    &tr("rename.cantConvert", &[]),
-                    &tr(
-                        "rename.unsupportedBack",
-                        &[
-                            ("source", &source.to_uppercase()),
-                            ("target", &target.to_uppercase()),
-                        ],
-                    ),
+            Decision::Restore => {
+                let _ = restore(&event.new, &event.old, event.at, admitted_id, false);
+            }
+            Decision::Unsupported { .. } | Decision::Unreadable | Decision::Mismatch { .. } => {
+                let allow_unreadable = matches!(decision, Decision::Unreadable);
+                let restored = restore(
+                    &event.new,
+                    &event.old,
+                    event.at,
+                    admitted_id,
+                    allow_unreadable,
                 );
+                if let Some((title, body)) =
+                    decision_notice(&decision, &event.old, &event.new, restored)
+                {
+                    notify(app, Tone::Warning, &title, &body);
+                }
             }
             Decision::Convert {
                 source,
@@ -210,29 +229,39 @@ impl RenameConvert {
                 if modifiers.max_size.is_some()
                     && self.registry.resolve_family(&source) != AssetFamily::Image
                 {
-                    restore(&event.new, &event.old);
+                    let restored = restore(&event.new, &event.old, event.at, admitted_id, false);
+                    let body = if restored {
+                        tr("rename.sizePicturesBody", &[])
+                    } else {
+                        tr("rename.stillNamed", &[("name", &base_name(&event.new))])
+                    };
                     notify(
                         app,
                         Tone::Warning,
                         &tr("rename.sizePicturesTitle", &[]),
-                        &tr("rename.sizePicturesBody", &[]),
+                        &body,
                     );
                     return;
                 }
-                let job = Job {
-                    current: event.new.clone(),
-                    original: event.old.clone(),
-                    final_path: apply::final_path_for(
-                        &final_path,
-                        &event.old,
-                        modifiers.keep_original,
-                    ),
-                    source: self.canonical(&source),
-                    target,
-                    keep_original: modifiers.keep_original,
-                    max_size: modifiers.max_size,
-                    from_menu: false,
+                let Some(admitted_id) = admitted_id else {
+                    let restored = restore(&event.new, &event.old, event.at, None, true);
+                    if let Some((title, body)) =
+                        decision_notice(&Decision::Unreadable, &event.old, &event.new, restored)
+                    {
+                        notify(app, Tone::Warning, &title, &body);
+                    }
+                    return;
                 };
+                let job = self.build_rename_job(
+                    &event.old,
+                    &event.new,
+                    &source,
+                    target,
+                    modifiers,
+                    &final_path,
+                    Some(event.at),
+                    Some(admitted_id),
+                );
                 if !self.in_flight.lock().unwrap().insert(job.current.clone()) {
                     return;
                 }
@@ -245,6 +274,37 @@ impl RenameConvert {
                     self.spawn(app.clone(), job, QuickOptions::default());
                 }
             }
+        }
+    }
+
+    fn should_keep_original(&self, has_keep_mark: bool) -> bool {
+        keep_original_for(self.keep_original.load(Ordering::Relaxed), has_keep_mark)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_rename_job(
+        &self,
+        old: &Path,
+        new: &Path,
+        source: &str,
+        target: String,
+        modifiers: rule::Modifiers,
+        final_path: &Path,
+        renamed_at: Option<std::time::Instant>,
+        admitted_id: Option<apply::FileIdentity>,
+    ) -> Job {
+        let keep_original = self.should_keep_original(modifiers.keep_original);
+        Job {
+            current: new.to_path_buf(),
+            original: old.to_path_buf(),
+            final_path: apply::final_path_for(final_path, old, keep_original),
+            source: self.canonical(source),
+            target,
+            keep_original,
+            max_size: modifiers.max_size,
+            from_menu: false,
+            renamed_at,
+            admitted_id,
         }
     }
 
@@ -276,7 +336,13 @@ impl RenameConvert {
             .into_owned();
         let upper = plan.target.to_uppercase();
 
-        let Some(FolderPlan { jobs, taken, large }) = self.plan_folder(&folder, &plan) else {
+        let Some(FolderPlan {
+            jobs,
+            taken,
+            large,
+            keep,
+        }) = self.plan_folder(&folder, &plan)
+        else {
             notify(
                 app,
                 Tone::Warning,
@@ -288,6 +354,7 @@ impl RenameConvert {
             );
             return;
         };
+        debug(&format!("folder planned: {} jobs", jobs.len()));
         if jobs.is_empty() {
             notify(
                 app,
@@ -304,7 +371,6 @@ impl RenameConvert {
 
         let this = Arc::clone(self);
         let app = app.clone();
-        let keep = plan.modifiers.keep_original;
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
             let counts = this.run_folder(&jobs, keep);
@@ -323,6 +389,7 @@ impl RenameConvert {
         if files.len() > MAX_FOLDER_FILES {
             return None;
         }
+        let keep = self.should_keep_original(plan.modifiers.keep_original);
         let mut jobs = Vec::new();
         let mut taken = 0usize;
         let mut large = 0usize;
@@ -351,18 +418,28 @@ impl RenameConvert {
                 taken += 1;
                 continue;
             }
+            let Some(admitted_id) = apply::capture_identity(&file) else {
+                continue;
+            };
             jobs.push(Job {
                 current: file.clone(),
                 original: file,
                 final_path,
                 source: self.canonical(content),
                 target: plan.target.clone(),
-                keep_original: plan.modifiers.keep_original,
+                keep_original: keep,
                 max_size: plan.modifiers.max_size,
                 from_menu: false,
+                renamed_at: None,
+                admitted_id: Some(admitted_id),
             });
         }
-        Some(FolderPlan { jobs, taken, large })
+        Some(FolderPlan {
+            jobs,
+            taken,
+            large,
+            keep,
+        })
     }
 
     /// Converts the jobs where they lie, a few at a time.
@@ -443,101 +520,98 @@ impl RenameConvert {
             };
             // Waits its turn in a burst; a stop while waiting skips the wait.
             let _slot = this.slots.take(stop);
-            match apply::run_unless(&job, &this.registry, &options, &stop) {
+            let result = apply::run_outcome(&job, &this.registry, &options, &stop);
+            if let Err(ref failure) = result {
+                if failure.restored && !menu && !this.quitting.load(Ordering::Relaxed) {
+                    shell_notice::file_restored(&job.current, &job.original);
+                }
+            }
+            match result {
                 Ok(done) => {
+                    if !job.from_menu {
+                        let kept = done.kept_original.as_deref();
+                        shell_notice::file_converted(
+                            &job.current,
+                            &done.final_path,
+                            kept.unwrap_or(&job.original),
+                            kept.is_some(),
+                        );
+                    }
                     let to = done
                         .final_path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned();
-                    let bin = tr(
-                        if job.keep_original {
-                            "rename.keptOriginal"
-                        } else if done.original_recycled {
-                            "rename.inBin"
-                        } else {
-                            "rename.notBinned"
-                        },
-                        &[],
-                    );
                     notify(
                         &app,
                         Tone::Success,
                         &format!("{from} → {to}"),
-                        &join_sentences(&[
-                            tr("rename.converted", &[("time", &took(done.elapsed))]),
-                            bin,
-                        ]),
+                        &success_card_body(job.keep_original, &done),
                     );
                 }
-                Err(AppError::Cancelled) => notify(
-                    &app,
-                    Tone::Warning,
-                    &tr("rename.notConvertedTitle", &[]),
-                    &tr(
-                        "rename.notConvertedBody",
-                        &[
-                            ("from", &from),
-                            (
-                                "reason",
-                                &tr(
-                                    if this.quitting.load(Ordering::Relaxed) {
-                                        "rename.reasonClosing"
-                                    } else {
-                                        "rename.reasonOff"
-                                    },
-                                    &[],
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
-                Err(e) if needs_ffmpeg(&e) => {
-                    crate::tray::open_settings(&app, "video");
-                    notify(
+                Err(failure) => match failure.error {
+                    AppError::Cancelled => notify(
                         &app,
                         Tone::Warning,
-                        &tr("rename.ffmpegTitle", &[]),
-                        &join_sentences(&[
-                            tr("rename.ffmpegBody", &[("from", &from)]),
-                            if menu || job.current.exists() {
-                                String::new()
-                            } else {
-                                tr("rename.nameBack", &[])
-                            },
-                        ]),
-                    )
-                }
-                Err(e) => {
-                    // Say where the file really is, not where it should be.
-                    let place = if job.current.exists() {
-                        tr(
-                            "rename.stillNamed",
-                            &[(
-                                "name",
-                                &job.current
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy(),
-                            )],
+                        &tr("rename.notConvertedTitle", &[]),
+                        &tr(
+                            "rename.notConvertedBody",
+                            &[
+                                ("from", &from),
+                                (
+                                    "reason",
+                                    &tr(
+                                        if this.quitting.load(Ordering::Relaxed) {
+                                            "rename.reasonClosing"
+                                        } else {
+                                            "rename.reasonOff"
+                                        },
+                                        &[],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    e if needs_ffmpeg(&e) => {
+                        crate::tray::open_settings(&app, "video");
+                        notify(
+                            &app,
+                            Tone::Warning,
+                            &tr("rename.ffmpegTitle", &[]),
+                            &join_sentences(&[
+                                tr("rename.ffmpegBody", &[("from", &from)]),
+                                if !menu && failure.restored {
+                                    tr("rename.nameBack", &[])
+                                } else {
+                                    String::new()
+                                },
+                            ]),
                         )
-                    } else {
-                        tr("rename.nameBack", &[])
-                    };
-                    notify(
-                        &app,
-                        Tone::Failure,
-                        &tr("rename.failedTitle", &[]),
-                        &join_sentences(&[
-                            tr(
-                                "rename.failedBody",
-                                &[("from", &from), ("error", &e.to_string())],
-                            ),
-                            place,
-                        ]),
-                    )
-                }
+                    }
+                    e => {
+                        // Say where the file really is, not where it should be.
+                        let place = if failure.restored {
+                            tr("rename.nameBack", &[])
+                        } else if job.current.exists() {
+                            tr("rename.stillNamed", &[("name", &base_name(&job.current))])
+                        } else {
+                            String::new()
+                        };
+                        notify(
+                            &app,
+                            Tone::Failure,
+                            &tr("rename.failedTitle", &[]),
+                            &join_sentences(&[
+                                tr(
+                                    "rename.failedBody",
+                                    &[("from", &from), ("error", &e.to_string())],
+                                ),
+                                place,
+                            ]),
+                        )
+                    }
+                },
             }
             this.in_flight.lock().unwrap().remove(&job.current);
         });
@@ -561,7 +635,15 @@ impl RenameConvert {
             .map(|(_, j)| j)
             .collect();
         for job in waiting {
-            apply::restore_name(&job);
+            if job
+                .admitted_id
+                .is_some_and(|fid| apply::matches_identity(&job.current, fid))
+            {
+                if let Some(at) = job.renamed_at.filter(|_| !job.from_menu) {
+                    apply::wait_for_file_notice(&job.current, at);
+                }
+                let _ = apply::restore_verified(&job);
+            }
             self.in_flight.lock().unwrap().remove(&job.current);
         }
         let deadline = std::time::Instant::now() + max;
@@ -598,7 +680,17 @@ impl RenameConvert {
 
     pub fn quick_cancel(&self, id: &str) {
         if let Some(job) = self.waiting.lock().unwrap().remove(id) {
-            apply::restore_name(&job);
+            if job
+                .admitted_id
+                .is_some_and(|fid| apply::matches_identity(&job.current, fid))
+            {
+                if let Some(at) = job.renamed_at.filter(|_| !job.from_menu) {
+                    apply::wait_for_file_notice(&job.current, at);
+                }
+                if apply::restore_verified(&job) && !job.from_menu {
+                    shell_notice::file_restored(&job.current, &job.original);
+                }
+            }
             self.in_flight.lock().unwrap().remove(&job.current);
         }
     }
@@ -737,6 +829,15 @@ impl RenameConvert {
             );
             return;
         }
+        let Some(admitted_id) = apply::capture_identity(&file) else {
+            notify(
+                app,
+                Tone::Failure,
+                &tr("rename.cantConvert", &[]),
+                &tr("rename.notReadable", &[("name", &name)]),
+            );
+            return;
+        };
         let job = Job {
             current: file.clone(),
             original: file.clone(),
@@ -746,6 +847,8 @@ impl RenameConvert {
             keep_original: true,
             max_size: None,
             from_menu: true,
+            renamed_at: None,
+            admitted_id: Some(admitted_id),
         };
         if !self.in_flight.lock().unwrap().insert(job.current.clone()) {
             return;
@@ -774,6 +877,28 @@ impl RenameConvert {
     }
 }
 
+/// Whether the original file stays on disk: setting XOR `&`.
+fn keep_original_for(setting: bool, has_keep_mark: bool) -> bool {
+    setting ^ has_keep_mark
+}
+
+fn success_card_body(keep_original: bool, done: &apply::Done) -> String {
+    let bin = tr(
+        if keep_original {
+            "rename.keptOriginal"
+        } else if done.original_recycled {
+            "rename.inBin"
+        } else {
+            "rename.notBinned"
+        },
+        &[],
+    );
+    join_sentences(&[
+        tr("rename.converted", &[("time", &took(done.elapsed))]),
+        bin,
+    ])
+}
+
 /// Runs on the watcher threads: only names ending in a format we know (or
 /// that plus marks like `+`, `&`, `@1080`) go any further.
 fn quick_filter(name: &str) -> bool {
@@ -789,10 +914,35 @@ fn quick_filter(name: &str) -> bool {
         .is_some_and(|k| k.contains(&ext.to_ascii_lowercase()))
 }
 
-/// Puts back the name a file or folder had before the rename. Never over
-/// something that took the old name meanwhile: then it keeps the new name.
-fn restore(now: &Path, before: &Path) {
-    let _ = zero_fs::rename_no_replace(now, before);
+/// Puts back the name a file had before the rename when `now` is still the
+/// same file (or still unreadable when `allow_unreadable` is true). Never
+/// overwrites a file that took `before` meanwhile; returns whether `now` was
+/// actually moved back to `before`.
+fn restore(
+    now: &Path,
+    before: &Path,
+    event_at: std::time::Instant,
+    id: Option<apply::FileIdentity>,
+    allow_unreadable: bool,
+) -> bool {
+    let matches_now = || match id {
+        Some(fid) => apply::matches_identity(now, fid),
+        None => allow_unreadable && apply::capture_identity(now).is_none(),
+    };
+    if !matches_now() {
+        return false;
+    }
+    if now != before {
+        apply::wait_for_file_notice(now, event_at);
+    }
+    if !matches_now() {
+        return false;
+    }
+    let ok = zero_fs::rename_no_replace(now, before).is_ok();
+    if ok {
+        shell_notice::file_restored(now, before);
+    }
+    ok
 }
 
 /// Renames a folder back, retrying while Explorer still holds it. Returns
@@ -801,22 +951,41 @@ fn rename_back(now: &Path, before: &Path) -> PathBuf {
     // Explorer must finish its own rename first, or it shows "The file or
     // folder does not exist". It says so with a shell notice; a rename made
     // elsewhere sends none, and then the full wait passes.
-    if shell_notice::wait_for_folder_rename(now, EXPLORER_RENAME_WAIT) {
+    let started = std::time::Instant::now();
+    let heard = shell_notice::wait_for_folder_rename(now, EXPLORER_RENAME_WAIT);
+    debug(&format!(
+        "folder notice heard={heard} after {:?}",
+        started.elapsed()
+    ));
+    if heard {
         // Explorer still looks at the new name once more right after its notice.
         std::thread::sleep(EXPLORER_SETTLE);
     }
-    for _ in 0..40 {
+    for attempt in 0..40 {
         match zero_fs::rename_no_replace(now, before) {
             Ok(()) => {
+                debug(&format!(
+                    "folder renamed back after {:?} (attempt {attempt})",
+                    started.elapsed()
+                ));
                 // Explorer overlooks a change on disk this soon after its own.
                 shell_notice::folder_renamed(now, before);
                 return before.to_path_buf();
             }
             // Something else has the old name: leave the folder as it is.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => break,
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => {
+                if attempt == 0 {
+                    debug(&format!("folder rename back failed: {e}"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
         }
     }
+    debug(&format!(
+        "folder keeps its new name after {:?}",
+        started.elapsed()
+    ));
     now.to_path_buf()
 }
 
@@ -859,6 +1028,8 @@ struct FolderPlan {
     taken: usize,
     /// Over 100 MB: converted one by one only.
     large: usize,
+    /// Whether originals stay on disk (setting XOR `&`).
+    keep: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -941,6 +1112,105 @@ fn took(elapsed: std::time::Duration) -> String {
     }
 }
 
+/// Retries transient read failures briefly (Explorer or antivirus may hold
+/// the file right after a rename) without sleeping once reading succeeds.
+fn retry_read<T, E>(
+    attempts: usize,
+    delay: std::time::Duration,
+    mut read: impl FnMut() -> Result<T, E>,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> Option<T> {
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
+        if let Ok(value) = read() {
+            return Some(value);
+        }
+        if attempt + 1 < attempts && !delay.is_zero() {
+            sleep(delay);
+        }
+    }
+    None
+}
+
+fn base_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn decision_notice(
+    decision: &Decision,
+    old: &Path,
+    new: &Path,
+    restored: bool,
+) -> Option<(String, String)> {
+    match decision {
+        Decision::Unsupported { source, target } => {
+            let body = if restored {
+                tr(
+                    "rename.unsupportedBack",
+                    &[
+                        ("source", &source.to_uppercase()),
+                        ("target", &target.to_uppercase()),
+                    ],
+                )
+            } else {
+                join_sentences(&[
+                    tr(
+                        "rename.unsupported",
+                        &[
+                            ("source", &source.to_uppercase()),
+                            ("target", &target.to_uppercase()),
+                        ],
+                    ),
+                    tr("rename.stillNamed", &[("name", &base_name(new))]),
+                ])
+            };
+            Some((tr("rename.cantConvert", &[]), body))
+        }
+        Decision::Unreadable => {
+            let body = if restored {
+                tr("rename.unreadableBack", &[("name", &base_name(old))])
+            } else {
+                join_sentences(&[
+                    tr("rename.notReadable", &[("name", &base_name(new))]),
+                    tr("rename.stillNamed", &[("name", &base_name(new))]),
+                ])
+            };
+            Some((tr("rename.cantConvert", &[]), body))
+        }
+        Decision::Mismatch { expected, actual } => {
+            let body = if restored {
+                let name = base_name(old);
+                let expected = expected.to_uppercase();
+                match actual {
+                    Some(actual) => tr(
+                        "rename.mismatchBack",
+                        &[
+                            ("name", &name),
+                            ("expected", &expected),
+                            ("actual", &actual.to_uppercase()),
+                            ("ext", &actual.to_ascii_lowercase()),
+                        ],
+                    ),
+                    None => tr(
+                        "rename.mismatchUnknownBack",
+                        &[("name", &name), ("expected", &expected)],
+                    ),
+                }
+            } else {
+                join_sentences(&[
+                    tr("rename.notReadable", &[("name", &base_name(new))]),
+                    tr("rename.stillNamed", &[("name", &base_name(new))]),
+                ])
+            };
+            Some((tr("rename.cantConvert", &[]), body))
+        }
+        Decision::Ignore | Decision::Restore | Decision::Convert { .. } => None,
+    }
+}
+
 fn notify(app: &AppHandle, tone: Tone, title: &str, body: &str) {
     crate::receipt::show(
         app,
@@ -970,10 +1240,15 @@ fn open_quick_window(app: &AppHandle, id: &str) {
     });
 }
 
+fn format_debug_line(elapsed: std::time::Duration, msg: &str) -> String {
+    format!("[{:>8.3}s] [rename-convert] {msg}", elapsed.as_secs_f64())
+}
+
 /// Diagnostics, only when ZC_DEBUG_RENAME is set.
 pub fn debug(msg: &str) {
     if std::env::var_os("ZC_DEBUG_RENAME").is_some() {
-        eprintln!("[rename-convert] {msg}");
+        let start = DEBUG_START.get_or_init(std::time::Instant::now);
+        eprintln!("{}", format_debug_line(start.elapsed(), msg));
     }
 }
 
@@ -985,6 +1260,18 @@ pub fn state(app: &AppHandle) -> Arc<RenameConvert> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_line_prefixes_elapsed_time() {
+        assert_eq!(
+            format_debug_line(std::time::Duration::from_millis(12_345), "step"),
+            "[  12.345s] [rename-convert] step"
+        );
+        assert_eq!(
+            format_debug_line(std::time::Duration::from_millis(5), "start"),
+            "[   0.005s] [rename-convert] start"
+        );
+    }
 
     #[test]
     fn slots_let_a_few_through_and_give_up_on_request() {
@@ -1043,9 +1330,14 @@ mod tests {
             target: "webp".into(),
             modifiers: rule::Modifiers::default(),
         };
-        let FolderPlan { jobs, taken, large } = rc.plan_folder(root, &plan).unwrap();
-        assert_eq!((jobs.len(), taken, large), (3, 2, 0));
-        let counts = rc.run_folder(&jobs, false);
+        let FolderPlan {
+            jobs,
+            taken,
+            large,
+            keep,
+        } = rc.plan_folder(root, &plan).unwrap();
+        assert_eq!((jobs.len(), taken, large, keep), (3, 2, 0, false));
+        let counts = rc.run_folder(&jobs, keep);
         assert_eq!(
             counts,
             FolderCounts {
@@ -1053,7 +1345,7 @@ mod tests {
                 ..Default::default()
             }
         );
-        let (tone, body) = folder_summary(&counts, large, taken, false, std::time::Duration::ZERO);
+        let (tone, body) = folder_summary(&counts, large, taken, keep, std::time::Duration::ZERO);
         assert_eq!(tone, Tone::Success, "{body}");
         for name in ["a.webp", "b.webp", "sub/c.webp", "d.webp"] {
             assert_eq!(
@@ -1096,5 +1388,332 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["a.png", "sub/b.png"]);
+    }
+
+    #[test]
+    fn keep_original_xor_covers_all_four_states() {
+        assert!(!keep_original_for(false, false));
+        assert!(keep_original_for(false, true));
+        assert!(keep_original_for(true, false));
+        assert!(!keep_original_for(true, true));
+    }
+
+    #[test]
+    fn keep_original_setting_applies_xor_to_rename_jobs_and_success_card() {
+        crate::i18n::set("en");
+        let rc = RenameConvert::new(Arc::new(ConverterRegistry::standard()));
+
+        for (setting, has_keep_mark, expected_keep) in [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            rc.keep_original.store(setting, Ordering::Relaxed);
+            let dir = tempfile::tempdir().unwrap();
+            let old = dir.path().join("photo.png");
+            let new = dir.path().join(if has_keep_mark {
+                "photo.webp&"
+            } else {
+                "photo.webp"
+            });
+            image::RgbaImage::from_pixel(16, 8, image::Rgba([10, 120, 200, 255]))
+                .save_with_format(&new, image::ImageFormat::Png)
+                .unwrap();
+
+            let Decision::Convert {
+                source,
+                target,
+                modifiers,
+                final_path,
+            } = rule::decide(
+                &old,
+                &new,
+                crate::core::sniff::sniff_file(&new)
+                    .map_or(rule::Content::Unknown, rule::Content::Known),
+                |id| rc.known(id),
+                |s, t| rc.can_route(s, t),
+            )
+            else {
+                panic!("expected Decision::Convert for setting={setting}, &={has_keep_mark}");
+            };
+
+            let job = rc.build_rename_job(
+                &old,
+                &new,
+                &source,
+                target,
+                modifiers,
+                &final_path,
+                None,
+                apply::capture_identity(&new),
+            );
+            assert_eq!(
+                job.keep_original, expected_keep,
+                "setting={setting}, &={has_keep_mark}"
+            );
+            let done = apply::run(&job, &rc.registry, &QuickOptions::default()).unwrap();
+            assert_eq!(old.exists(), expected_keep);
+            assert_eq!(
+                done.kept_original.as_deref(),
+                expected_keep.then_some(old.as_path())
+            );
+            assert!(dir.path().join("photo.webp").exists());
+            let body = success_card_body(job.keep_original, &done);
+            if expected_keep {
+                assert!(body.contains("Original kept."), "{body}");
+            } else {
+                assert!(body.contains("Original is in the Recycle Bin."), "{body}");
+            }
+        }
+
+        // Same-format resize with setting ON keeps the original under its name
+        // and places the resized output at a free name unless `&` flips it.
+        rc.keep_original.store(true, Ordering::Relaxed);
+        for (has_keep_mark, expected_keep) in [(false, true), (true, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let old = dir.path().join("photo.png");
+            let new = dir.path().join(if has_keep_mark {
+                "photo.png@16&"
+            } else {
+                "photo.png@16"
+            });
+            image::RgbaImage::from_pixel(32, 16, image::Rgba([10, 120, 200, 255]))
+                .save_with_format(&new, image::ImageFormat::Png)
+                .unwrap();
+
+            let Decision::Convert {
+                source,
+                target,
+                modifiers,
+                final_path,
+            } = rule::decide(
+                &old,
+                &new,
+                crate::core::sniff::sniff_file(&new)
+                    .map_or(rule::Content::Unknown, rule::Content::Known),
+                |id| rc.known(id),
+                |s, t| rc.can_route(s, t),
+            )
+            else {
+                panic!("expected Decision::Convert for same-format resize");
+            };
+
+            let job = rc.build_rename_job(
+                &old,
+                &new,
+                &source,
+                target,
+                modifiers,
+                &final_path,
+                None,
+                apply::capture_identity(&new),
+            );
+            assert_eq!(job.keep_original, expected_keep);
+            let done = apply::run(&job, &rc.registry, &QuickOptions::default()).unwrap();
+            if expected_keep {
+                assert_ne!(done.final_path, old);
+                assert_eq!(image::image_dimensions(&old).unwrap(), (32, 16));
+                assert_eq!(image::image_dimensions(&done.final_path).unwrap(), (16, 8));
+            } else {
+                assert_eq!(done.final_path, old);
+                assert_eq!(image::image_dimensions(&old).unwrap(), (16, 8));
+            }
+        }
+    }
+
+    #[test]
+    fn keep_original_setting_applies_xor_to_folder_conversions() {
+        crate::i18n::set("en");
+        let rc = RenameConvert::new(Arc::new(ConverterRegistry::standard()));
+
+        for (setting, has_keep_mark, expected_keep) in [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            rc.keep_original.store(setting, Ordering::Relaxed);
+            let dir = tempfile::tempdir().unwrap();
+            let folder = dir.path().join("Holiday");
+            std::fs::create_dir(&folder).unwrap();
+            let src_img = folder.join("a.png");
+            image::RgbImage::from_pixel(16, 8, image::Rgb([10, 120, 200]))
+                .save_with_format(&src_img, image::ImageFormat::Png)
+                .unwrap();
+
+            let renamed = dir.path().join(if has_keep_mark {
+                "Holiday.webp&"
+            } else {
+                "Holiday.webp"
+            });
+            let plan =
+                rule::decide_folder(&folder, &renamed, |id| rc.writable(id)).expect("folder plan");
+            let FolderPlan {
+                jobs,
+                taken,
+                large,
+                keep,
+            } = rc.plan_folder(&folder, &plan).unwrap();
+            assert_eq!(keep, expected_keep);
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].keep_original, expected_keep);
+
+            let counts = rc.run_folder(&jobs, keep);
+            assert_eq!(counts.done, 1);
+            assert_eq!(src_img.exists(), expected_keep);
+            assert!(folder.join("a.webp").exists());
+            let (tone, body) =
+                folder_summary(&counts, large, taken, keep, std::time::Duration::ZERO);
+            assert_eq!(tone, Tone::Success, "{body}");
+            if expected_keep {
+                assert!(body.contains("Originals kept."), "{body}");
+            } else {
+                assert!(body.contains("Originals are in the Recycle Bin."), "{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn retry_read_stops_immediately_on_success_and_bounds_retries() {
+        let delay = std::time::Duration::from_millis(50);
+
+        // Immediate Ok(None) (readable, unrecognised bytes) does not retry or sleep.
+        let mut reads = 0;
+        let mut sleeps = 0;
+        let out = retry_read(
+            SNIFF_ATTEMPTS,
+            delay,
+            || -> Result<Option<&'static str>, ()> {
+                reads += 1;
+                Ok(None)
+            },
+            |_| sleeps += 1,
+        );
+        assert_eq!(out, Some(None));
+        assert_eq!((reads, sleeps), (1, 0));
+
+        // Transient read errors succeed on attempt 3 after 2 sleeps.
+        let mut reads = 0;
+        let mut sleeps = Vec::new();
+        let out = retry_read(
+            SNIFF_ATTEMPTS,
+            delay,
+            || -> Result<Option<&'static str>, ()> {
+                reads += 1;
+                if reads < 3 {
+                    Err(())
+                } else {
+                    Ok(Some("m4a"))
+                }
+            },
+            |d| sleeps.push(d),
+        );
+        assert_eq!(out, Some(Some("m4a")));
+        assert_eq!(reads, 3);
+        assert_eq!(sleeps, vec![delay, delay]);
+
+        // Persistent read errors give up after SNIFF_ATTEMPTS without a trailing sleep.
+        let mut reads = 0;
+        let mut sleeps = Vec::new();
+        let out = retry_read(
+            SNIFF_ATTEMPTS,
+            delay,
+            || -> Result<Option<&'static str>, ()> {
+                reads += 1;
+                Err(())
+            },
+            |d| sleeps.push(d),
+        );
+        assert_eq!(out, None);
+        assert_eq!(reads, SNIFF_ATTEMPTS);
+        assert_eq!(sleeps.len(), SNIFF_ATTEMPTS - 1);
+        assert_eq!(
+            sleeps.into_iter().sum::<std::time::Duration>(),
+            std::time::Duration::from_millis(300)
+        );
+    }
+
+    #[test]
+    fn warning_cards_explain_unreadable_and_mismatched_renames() {
+        crate::i18n::set("en");
+        let old = Path::new("C:/Music/song.m4a");
+        let new = Path::new("C:/Music/song.mp3");
+
+        assert_eq!(
+            decision_notice(&Decision::Unreadable, old, new, true),
+            Some((
+                "Can't convert this one".into(),
+                "Couldn't read song.m4a. It may be in use by another program or not downloaded from the cloud yet. The name was put back.".into(),
+            ))
+        );
+        assert_eq!(
+            decision_notice(
+                &Decision::Mismatch {
+                    expected: "m4a".into(),
+                    actual: Some("webm".into()),
+                },
+                old,
+                new,
+                true,
+            ),
+            Some((
+                "Can't convert this one".into(),
+                "song.m4a isn't really a M4A file (it looks like WEBM). Rename it to .webm first, or convert it from the app window. The name was put back.".into(),
+            ))
+        );
+        assert_eq!(
+            decision_notice(
+                &Decision::Mismatch {
+                    expected: "m4a".into(),
+                    actual: None,
+                },
+                old,
+                new,
+                true,
+            ),
+            Some((
+                "Can't convert this one".into(),
+                "song.m4a isn't really a M4A file. The name was put back.".into(),
+            ))
+        );
+        // When restoration could not happen (e.g. old name taken), never claim the name went back.
+        let (_, not_restored) = decision_notice(&Decision::Unreadable, old, new, false).unwrap();
+        assert!(!not_restored.contains("put back"), "{not_restored}");
+        assert!(not_restored.contains("song.mp3"), "{not_restored}");
+    }
+
+    #[test]
+    fn quick_cancel_leaves_substitute_file_untouched() {
+        let rc = RenameConvert::new(Arc::new(ConverterRegistry::standard()));
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("photo.png");
+        let cur = dir.path().join("photo.webp+");
+        std::fs::write(&cur, b"\x89PNG\r\n\x1a\nfirst").unwrap();
+        let admitted = apply::capture_identity(&cur);
+
+        std::fs::remove_file(&cur).unwrap();
+        std::fs::write(&cur, b"foreign replacement").unwrap();
+
+        let job = rc.build_rename_job(
+            &old,
+            &cur,
+            "png",
+            "webp".into(),
+            rule::Modifiers {
+                ask_options: true,
+                ..Default::default()
+            },
+            &dir.path().join("photo.webp"),
+            None,
+            admitted,
+        );
+        rc.in_flight.lock().unwrap().insert(cur.clone());
+        rc.waiting.lock().unwrap().insert("id1".into(), job);
+
+        rc.quick_cancel("id1");
+        assert_eq!(std::fs::read(&cur).unwrap(), b"foreign replacement");
+        assert!(!old.exists());
+        assert!(!rc.in_flight.lock().unwrap().contains(&cur));
     }
 }

@@ -8,6 +8,7 @@ export type { QuickJobInfo, QuickOptions, WatchedFolder };
 /** On/off state of rename-to-convert, shared with the tray menu. */
 export function useRenameConvert() {
   const [enabled, setEnabledState] = useState<boolean | null>(null);
+  const [keepOriginal, setKeepOriginalState] = useState<boolean | null>(null);
   const [autostart, setAutostartState] = useState<boolean | null>(null);
   const [contextMenu, setContextMenuState] = useState<boolean | null>(null);
   const [folders, setFolders] = useState<WatchedFolder[]>([]);
@@ -18,6 +19,7 @@ export function useRenameConvert() {
       .status()
       .then((s) => {
         setEnabledState(s.enabled);
+        setKeepOriginalState(s.keep_original ?? null);
         setAutostartState(s.autostart);
         setFolders(s.folders ?? []);
         setContextMenuState(s.context_menu ?? null);
@@ -67,6 +69,11 @@ export function useRenameConvert() {
     renameGateway.setEnabled(value).then(() => setFolderError(null), saveFailed);
   }, [saveFailed]);
 
+  const setKeepOriginal = useCallback((value: boolean) => {
+    setKeepOriginalState(value);
+    renameGateway.setKeepOriginal(value).then(() => setFolderError(null), saveFailed);
+  }, [saveFailed]);
+
   const setAutostart = useCallback((value: boolean) => {
     setAutostartState(value);
     renameGateway.setAutostart(value).catch(refresh);
@@ -80,6 +87,8 @@ export function useRenameConvert() {
   return {
     enabled,
     setEnabled,
+    keepOriginal,
+    setKeepOriginal,
     autostart,
     setAutostart,
     contextMenu,

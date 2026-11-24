@@ -19,18 +19,19 @@ Each step says what you should see. If something else happens, stop and note the
 6. Rename `d.png` to `d.webp+`. A small window asks for quality and size; cancel it. The file is named `d.png` again.
 7. Rename the folder `pics` to `pics.webp`. Its three files become WebP; the folder keeps its name.
 8. On the Desktop, convert a file by renaming it. The new file's icon stays where the old one was.
+9. Turn on **Keep the original file** in Settings; the `&` line under **Add to the new name** now says it sends the original to the Recycle Bin. Rename a PNG to `.webp`: both files stay, and the notice says Original kept. Rename another PNG to `.webp&`: only the `.webp` stays, the original is in the Recycle Bin, and the notice says Original is in the Recycle Bin. Turn **Keep the original file** back off.
 
 ## Right-click menu
 
-9. Right-click a PNG: **Convert with ZeroConverter → To WEBP**. A copy appears next to it; the original stays.
-10. Turn rename-to-convert off in Settings, then use the menu again. It still works. Rename a file to `.webp`: nothing happens.
-11. Turn the right-click menu off in Settings. The menu disappears from Explorer (it may take a moment).
+10. Right-click a PNG: **Convert with ZeroConverter → To WEBP**. A copy appears next to it; the original stays.
+11. Turn rename-to-convert off in Settings, then use the menu again. It still works. Rename a file to `.webp`: nothing happens.
+12. Turn the right-click menu off in Settings. The menu disappears from Explorer (it may take a moment).
 
 ## Stopping and closing
 
-12. Turn rename-to-convert on, rename a large file, and quit from the tray at once. The app closes within a few seconds; the file is either converted or back under its old name, never missing.
-13. Start the app again. No `.zc-*` or `zero_tmp_*` folders are left next to the files you converted.
+13. Turn rename-to-convert on, rename a large file, and quit from the tray at once. The app closes within a few seconds; the file is either converted or back under its old name, never missing.
+14. Start the app again. No `.zc-*` or `zero_tmp_*` folders are left next to the files you converted.
 
 ## Uninstall (installed builds only)
 
-14. Uninstall. The right-click menu is gone from Explorer, and the files you converted are still there.
+15. Uninstall. The right-click menu is gone from Explorer, and the files you converted are still there.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1
+
+- Settings › Convert on rename › Keep the original file (#7): option to keep originals on disk without typing `&` (`&` then sends that one original to the Recycle Bin instead).
+- Explorer refreshes the file list after `@N`, `&`, and `+` renames instead of keeping the typed name on screen (#4), and shows the restored original when keeping originals.
+- Waits for Explorer to finish a file rename before swapping or restoring the file, preventing transient "file not found" errors.
+- Works when Explorer hides file extensions, and extracts audio when renaming `.mp4` / `.m4v` to `.m4a`.
+- Explains when a renamed file can't be read or isn't the format its name says, instead of doing nothing.
+
 ## 0.1.0
 
 First public release.

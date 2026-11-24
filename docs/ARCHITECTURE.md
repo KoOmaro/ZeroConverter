@@ -58,10 +58,10 @@ Options are not typed out in the API layer. `ConversionSubmitDto` flattens every
 
 ## Rename-to-convert
 
-`src-tauri/src/rename_convert/` watches the fixed drives. When a file's extension is renamed to another format the app can write, the file is converted and the original name comes back.
+`src-tauri/src/rename_convert/` watches the fixed drives. When a file's extension is renamed to another format the app can write (including `<stem>.<target>.<ext>` when Explorer hides file extensions), the file is converted and the original name comes back.
 
 - **Who renamed it:** outside the folders the user trusts, a rename only counts when a file manager is in the foreground, so a program renaming its own files is not mistaken for the user.
-- **Marks in the new name:** `&` keeps the original, `@N` limits the longer side to N pixels (images), `+` opens the options window. They can come in any order.
+- **Marks in the new name:** `&` reverses whether the original stays (keeps it by default, or sends it to the Recycle Bin when **Keep the original file** is on in Settings), `@N` limits the longer side to N pixels (images), `+` opens the options window. They can come in any order.
 - **Folders:** renaming a folder to `Name.webp` converts the files inside it, up to 2,000. The folder gets its name back first, but only after Explorer has announced its own rename to the shell (or 1.5 s without a notice), and the shell is told about the rename back (`shell_notice.rs`). A folder renamed again sooner makes Explorer show "The file or folder does not exist" or keep the old label.
 - **Right-click menu:** `context_menu.rs` writes a per-user "ZeroConverter" submenu (HKCU, no admin) that runs `--convert <format> "<file>"`. A running instance takes the request over. It converts a copy next to the file and works whether rename-to-convert is on or off. The uninstaller removes the menu.
 
@@ -69,11 +69,12 @@ How a renamed file is swapped (`rename_convert/apply.rs`), so that the user's fi
 
 1. When the file can be read, its identity is taken: volume and file index, size, last write, and a fingerprint of its first and last 4 KB (on FAT drives the index can repeat and the time is coarse). Every later step checks it. A file that was replaced or written to meanwhile is left alone, and so is a file whose identity cannot be read.
 2. A hidden `.zc-*` folder next to the file holds a hard link to it (a copy where the volume has no hard links), named with the source extension, and the converted output.
-3. The swap is two moves that never replace a name: the renamed file to a free name (its original one when possible), then the output to the final name. If the second move fails, the first is undone.
-4. The original goes to the Recycle Bin only if it is still the file that was converted. With `&` it stays next to the new file.
+3. The swap is two moves that never replace a name: the renamed file to a free name (its original one when possible), then the output to the final name. If the second move fails, the first is undone. Before moving a file from an Explorer rename event away (for the swap or to restore its old name on failure), `apply.rs` waits in parallel with conversion for Explorer's shell rename notice (`SHCNE_RENAMEITEM` via `shell_notice.rs`, bounded by the same 1.5 s / 0.3 s window as folders) so Explorer does not report a missing file.
+4. Unless the job keeps the original (from the **Keep the original file** setting XOR `&`), the original goes to the Recycle Bin only if it is still the file that was converted.
 5. The hard link in the scratch folder is a second name for the original. It is removed with the folder only when the original is confirmed in place or in the bin. If it has become the last name, it is moved back into the folder under a visible free name. If even that fails, the folder is kept.
 6. Single renames and menu copies convert at most as many at a time as the machine has cores; the rest wait under their new name. A folder conversion has its own pool of the same size.
 7. Turning rename-to-convert off, quitting, or an update stops every job that has not swapped yet (menu copies stop only on quitting); the file gets its old name back. Quitting waits up to five seconds for a swap under way. On the Desktop the new file is put back where the old icon was (`desktop.rs`, best effort).
+8. When a finished rename conversion lands at a different name from the one typed (`@N`, `+`, `&`), restores a kept original next to a plain rename, or reverts a file back to its old name, `shell_notice.rs` notifies the shell (`SHCNE_RENAMEITEM`, `SHCNE_CREATE` for newly created or restored files, and `SHCNE_UPDATEDIR`) right away and once more after 1.5 s off the rename thread so Explorer updates immediately and drops any stale typed label.
 
 ## Updates
 

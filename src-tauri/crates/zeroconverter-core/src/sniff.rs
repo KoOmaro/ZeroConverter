@@ -124,17 +124,38 @@ pub fn sniff(h: &[u8]) -> Option<&'static str> {
     crate::handlers::image::formats::sniff(head).map(|m| m.descriptor.id)
 }
 
+/// Reads the head of a file and sniffs it, preserving I/O errors so callers
+/// can tell an unreadable file apart from one with unrecognised bytes.
+/// SVG files with a long XML prolog get a wider look so the `<svg` root is
+/// still found.
+pub fn try_sniff_file(path: &Path) -> std::io::Result<Option<&'static str>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = vec![0u8; 512];
+    let n = read_up_to(&mut file, &mut head)?;
+    head.truncate(n);
+    Ok(sniff(&head).or_else(|| {
+        let text = String::from_utf8_lossy(&head);
+        text.contains("<svg").then_some("svg")
+    }))
+}
+
+fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
+}
+
 /// Reads the head of a file and sniffs it. SVG files with a long XML prolog
 /// get a wider look so the `<svg` root is still found.
 pub fn sniff_file(path: &Path) -> Option<&'static str> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut head = vec![0u8; 512];
-    let n = file.read(&mut head).ok()?;
-    head.truncate(n);
-    sniff(&head).or_else(|| {
-        let text = String::from_utf8_lossy(&head);
-        text.contains("<svg").then_some("svg")
-    })
+    try_sniff_file(path).ok().flatten()
 }
 
 /// Canonical id for an extension, folding the spellings people actually use.
@@ -236,6 +257,24 @@ mod tests {
     fn unknown_content_is_none() {
         assert_eq!(sniff(b"hello world"), None);
         assert_eq!(sniff(b""), None);
+    }
+
+    #[test]
+    fn try_sniff_file_separates_read_errors_from_unknown_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(try_sniff_file(&dir.path().join("missing.png")).is_err());
+
+        let unknown = dir.path().join("notes.m4a");
+        std::fs::write(&unknown, b"not a media header").unwrap();
+        assert_eq!(try_sniff_file(&unknown).unwrap(), None);
+
+        let empty = dir.path().join("empty.m4a");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(try_sniff_file(&empty).unwrap(), None);
+
+        let png = dir.path().join("pic.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n0000").unwrap();
+        assert_eq!(try_sniff_file(&png).unwrap(), Some("png"));
     }
 
     #[test]
