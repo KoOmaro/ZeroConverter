@@ -1,6 +1,6 @@
 [package]
 name = "zeroconverter-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "ZeroConverter from the command line: JSON in, JSON lines out."
 authors = ["ZeroFoundry"]
 license = "MIT"

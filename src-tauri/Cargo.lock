@@ -7877,7 +7877,7 @@ dependencies = [
 
 [[package]]
 name = "zero-converter"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dunce",
  "image",
@@ -7905,7 +7905,7 @@ dependencies = [
 
 [[package]]
 name = "zero_fs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dunce",
  "serde",
@@ -7916,7 +7916,7 @@ dependencies = [
 
 [[package]]
 name = "zeroconverter-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ctrlc",
  "image",
@@ -7931,7 +7931,7 @@ dependencies = [
 
 [[package]]
 name = "zeroconverter-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dds",
  "flac-codec",

@@ -4,7 +4,7 @@ members = [".", "crates/zero_fs", "crates/zeroconverter-core", "crates/zeroconve
 
 [package]
 name = "zero-converter"
-version = "0.1.1"
+version = "0.1.2"
 description = "Offline batch asset converter for game developers and technical artists"
 authors = ["ZeroFoundry"]
 license = "MIT"
