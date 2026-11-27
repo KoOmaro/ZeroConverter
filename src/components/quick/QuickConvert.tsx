@@ -1,36 +1,48 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { quickJob, QUALITY_TARGETS, BITRATES, type QuickJobInfo } from "../../application/renameConvert";
+import { quickJob, type QuickJobInfo } from "../../application/renameConvert";
+import { requestOptions, withValue, type OptionValues } from "../../application/outputOptions.mjs";
+import { OptionFields } from "../options/OptionFields";
 
 interface QuickConvertProps {
   id: string;
 }
 
 /**
- * The small window a `+` rename opens (`photo.webp+`): the few options that
- * matter for this conversion, Enter to convert, Esc to cancel.
+ * The small window a `+` rename opens (`photo.webp+`): the options the engine
+ * marks `quick` for this target, starting from the main window's choices,
+ * plus the longest side for formats that can be resized. Enter converts, Esc
+ * cancels.
  */
 export const QuickConvert: React.FC<QuickConvertProps> = ({ id }) => {
   const { t } = useTranslation();
   const [info, setInfo] = useState<QuickJobInfo | null>(null);
-  const [quality, setQuality] = useState(90);
+  const [values, setValues] = useState<OptionValues>({});
   const [maxSide, setMaxSide] = useState<string>("");
-  const [kbps, setKbps] = useState<number | null>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     quickJob.info(id).then(setInfo).catch(() => setInfo(null));
+    quickJob.savedValues().then(setValues).catch(() => {});
   }, [id]);
 
+  const specs = (info?.options ?? []).filter((spec) => spec.quick);
+  const resizable = (info?.options ?? []).some((spec) => spec.key === "resize_mode");
+  const maxSideLimit = info?.options.find((spec) => spec.key === "resize_width")?.max;
+
   const confirm = () => {
+    if (!info) return;
     const side = Number(maxSide);
-    const resize = side > 0;
+    const resize = resizable && side > 0;
     quickJob
       .confirm(id, {
-        quality,
-        resize_mode: resize ? "fit_box" : "none",
-        resize_width: resize ? side : null,
-        resize_height: resize ? side : null,
-        bitrate_kbps: bitrate ? (kbps ?? bitrate.fallback) : null,
+        ...requestOptions(specs, values, info.family, info.target),
+        ...(resizable
+          ? { resize_mode: resize ? "fit_box" : "none", resize_width: resize ? side : null, resize_height: resize ? side : null }
+          : {}),
       })
       .catch(() => {});
   };
@@ -50,19 +62,46 @@ export const QuickConvert: React.FC<QuickConvertProps> = ({ id }) => {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const lossy = info ? QUALITY_TARGETS.has(info.target) : false;
-  const bitrate = info ? BITRATES[info.target] : undefined;
-  const isImage = info?.family === "image";
   const stem = info?.name.replace(/\.[^.]+$/, "") ?? "";
+
+  // The window takes the height of what it shows: more options (WebP lossy
+  // adds a quality slider) must never push Convert out of view.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const fit = () =>
+      quickJob.fitWindow(
+        WINDOW_WIDTH,
+        (headerRef.current?.offsetHeight ?? 0) + body.offsetHeight + (footerRef.current?.offsetHeight ?? 0),
+      );
+    const observer = new ResizeObserver(fit);
+    observer.observe(body);
+    fit();
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (info) quickJob.titleWindow(`${stem}.${info.target} · ZeroConverter`);
+  }, [info, stem]);
 
   return (
     <div className="flex h-screen flex-col bg-titlebar text-text-primary select-none">
-      <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 px-4">
+      <div ref={headerRef} data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 ps-4 pe-1.5">
         <img src="/zeroconverter-mark.svg" alt="" width={16} height={16} className="pointer-events-none h-4 w-4" />
-        <span className="pointer-events-none font-brand text-[13px] font-semibold">ZeroConverter</span>
+        <span className="pointer-events-none flex-1 font-brand text-[13px] font-semibold">ZeroConverter</span>
+        <button
+          type="button"
+          onClick={cancel}
+          aria-label={t("quick.cancel")}
+          title={t("quick.cancel")}
+          className="grid h-8 w-8 place-items-center rounded-control text-text-secondary transition-colors duration-150 hover:bg-surface-2 hover:text-text-primary"
+        >
+          <X size={15} aria-hidden="true" />
+        </button>
       </div>
 
-      <div className="flex-1 space-y-5 px-4 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={bodyRef} className="space-y-5 px-4 pb-4">
         {info ? (
           <p className="truncate text-[15px] font-medium" title={info.name}>
             <span className="text-text-secondary">{stem}.</span>
@@ -80,44 +119,18 @@ export const QuickConvert: React.FC<QuickConvertProps> = ({ id }) => {
           </p>
         )}
 
-        {lossy && (
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label htmlFor="quick-quality" className="type-control-label text-text-secondary">{t("quick.quality")}</label>
-              <span className="font-mono text-[12px] tabular-nums">{quality}</span>
-            </div>
-            <input
-              id="quick-quality"
-              type="range"
-              min="1"
-              max="100"
-              value={quality}
-              onChange={(e) => setQuality(Number(e.target.value))}
-              className="zc-range w-full"
-              style={{ "--fill": `${quality}%` } as React.CSSProperties}
-              autoFocus
-            />
-          </div>
+        {info && specs.length > 0 && (
+          <OptionFields
+            idPrefix="quick"
+            specs={specs}
+            values={values}
+            family={info.family}
+            target={info.target}
+            onChange={(spec, value) => setValues((prev) => withValue(prev, spec, info.family, info.target, value))}
+          />
         )}
 
-        {bitrate && (
-          <div className="space-y-1.5">
-            <label htmlFor="quick-bitrate" className="type-control-label text-text-secondary">{t("quick.bitrate")}</label>
-            <select
-              id="quick-bitrate"
-              value={kbps ?? bitrate.fallback}
-              onChange={(e) => setKbps(Number(e.target.value))}
-              className="h-8 w-full rounded-control border border-input-border bg-input-bg px-2 font-mono text-[12px] text-text-primary"
-              autoFocus
-            >
-              {bitrate.choices.map((k) => (
-                <option key={k} value={k}>{k} kbps</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {isImage && (
+        {resizable && (
           <div className="space-y-1.5">
             <label htmlFor="quick-size" className="type-control-label text-text-secondary">{t("quick.longestSide")}</label>
             <input
@@ -126,18 +139,19 @@ export const QuickConvert: React.FC<QuickConvertProps> = ({ id }) => {
               inputMode="numeric"
               autoComplete="off"
               min="1"
-              max="16384"
+              max={maxSideLimit}
               placeholder={t("quick.original")}
               value={maxSide}
               onChange={(e) => setMaxSide(e.target.value)}
-              className="h-8 w-full rounded-control border border-input-border bg-input-bg px-2 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary"
-              autoFocus={!lossy}
+              className="zc-field font-mono"
+              autoFocus={specs.length === 0}
             />
           </div>
         )}
       </div>
+      </div>
 
-      <div className="flex shrink-0 justify-end gap-2 px-4 pb-4">
+      <div ref={footerRef} className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-1">
         <button
           type="button"
           onClick={cancel}
@@ -157,6 +171,9 @@ export const QuickConvert: React.FC<QuickConvertProps> = ({ id }) => {
     </div>
   );
 };
+
+/** Matches the width the window opens at (`open_quick_window`). */
+const WINDOW_WIDTH = 380;
 
 function formatLargeSize(bytes: number): string {
   const gb = bytes / 1024 ** 3;

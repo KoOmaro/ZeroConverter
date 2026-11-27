@@ -14,6 +14,7 @@ pub mod run;
 use std::path::Path;
 
 use crate::app_error::AppError;
+use crate::conversion::options::{Control, OptionSpec, OptionValue, Scope};
 use crate::conversion::traits::{ConverterHandler, ExecContext};
 use crate::conversion::types::{
     find_descriptor, ConversionCapability, ConversionRequest, ConversionResult, FormatDescriptor,
@@ -22,6 +23,39 @@ use crate::conversion::types::{
 pub use formats::VIDEO_FORMATS;
 
 pub struct VideoHandler;
+
+/// Quality of a re-encode (MP4, MKV, MOV, WebM). The bounds are the ones
+/// `validate` checks; unset is the same 90 `execute` uses.
+pub static QUALITY: OptionSpec = OptionSpec {
+    key: "quality",
+    control: Control::Slider { min: 1, max: 100 },
+    default: OptionValue::Int(90),
+    unit: None,
+    scope: Scope::Format,
+    quick: true,
+    show_when: None,
+    note: Some("used when the video is re-encoded; a container change that can copy the streams keeps them as they are"),
+};
+
+/// Scale a taller video down to this height (MP4, MKV, MOV, WebM). Unset
+/// keeps the size; a smaller video is never scaled up.
+pub static MAX_HEIGHT: OptionSpec = OptionSpec {
+    key: "max_height",
+    control: Control::Number {
+        min: MAX_HEIGHT_RANGE.0 as i64,
+        max: MAX_HEIGHT_RANGE.1 as i64,
+        presets: &[2160, 1440, 1080, 720, 480],
+    },
+    default: OptionValue::Unset,
+    unit: Some("p"),
+    scope: Scope::Format,
+    quick: true,
+    show_when: None,
+    note: Some("scales a taller video down (re-encodes it); unset keeps the size"),
+};
+
+/// Heights `max_height` accepts.
+const MAX_HEIGHT_RANGE: (u32, u32) = (144, 4320);
 
 /// Container ids `sniff` can return for a file this handler reads.
 fn sniff_matches(extension_id: &str, content: &str) -> bool {
@@ -73,6 +107,19 @@ impl ConverterHandler for VideoHandler {
             .collect()
     }
 
+    /// Containers take a quality. Audio targets take the audio family's
+    /// options for that format (WAV: sample rate and mono, applied by
+    /// FFmpeg); GIF has no setting.
+    fn output_options(&self, target: &str) -> Vec<&'static OptionSpec> {
+        match formats::target_of(target) {
+            Some(formats::Target::Container(_)) => vec![&QUALITY, &MAX_HEIGHT],
+            Some(formats::Target::Audio(_)) => crate::handlers::audio::formats::find(target)
+                .filter(|module| module.descriptor.can_write)
+                .map_or_else(Vec::new, |module| module.options.to_vec()),
+            Some(formats::Target::Gif) | None => Vec::new(),
+        }
+    }
+
     fn validate(&self, request: &ConversionRequest) -> Result<(), AppError> {
         let input = Path::new(&request.input_path);
         if !input.exists() {
@@ -91,6 +138,17 @@ impl ConverterHandler for VideoHandler {
             if !q.as_u64().is_some_and(|q| (1..=100).contains(&q)) {
                 return Err(AppError::Validate(format!(
                     "Quality must be between 1 and 100, got: {q}"
+                )));
+            }
+        }
+        if let Some(h) = request.options.get(MAX_HEIGHT.key).filter(|h| !h.is_null()) {
+            let (lo, hi) = MAX_HEIGHT_RANGE;
+            if !h
+                .as_u64()
+                .is_some_and(|h| (u64::from(lo)..=u64::from(hi)).contains(&h))
+            {
+                return Err(AppError::Validate(format!(
+                    "Maximum height must be between {lo} and {hi} pixels, got: {h}"
                 )));
             }
         }
@@ -125,6 +183,36 @@ mod tests {
     use super::*;
     use crate::conversion::types::AssetFamily;
     use crate::test_utils::{create_malformed_file, make_request, MalformedMode};
+
+    #[test]
+    fn every_target_declares_options_that_validation_agrees_with() {
+        // AVI is read only, so every writable target is a route from it.
+        let input = create_malformed_file(MalformedMode::Garbage, "avi");
+        let handler = VideoHandler;
+        for target in VIDEO_FORMATS.iter().filter(|d| d.can_write) {
+            let specs = handler.output_options(target.id);
+            crate::conversion::options::spec_tests::specs_agree_with_validation(
+                target.id,
+                &specs,
+                &|options| {
+                    handler.validate(&make_request(
+                        AssetFamily::Video,
+                        input.path(),
+                        Path::new("out.tmp"),
+                        target.id,
+                        Some(options),
+                    ))
+                },
+            );
+        }
+        let keys =
+            |t: &str| -> Vec<&str> { handler.output_options(t).iter().map(|s| s.key).collect() };
+        assert_eq!(keys("mp4"), ["quality", "max_height"]);
+        assert!(keys("gif").is_empty());
+        assert_eq!(keys("wav"), ["sample_rate", "channels"]);
+        assert_eq!(keys("m4a"), ["bitrate_kbps", "sample_rate", "channels"]);
+        assert_eq!(keys("flac"), ["sample_rate", "channels"]);
+    }
 
     #[test]
     fn capabilities_are_every_writable_format_except_the_source() {

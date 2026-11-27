@@ -1,3 +1,4 @@
+use crate::conversion::options::{Control, OptionSpec, OptionValue, Scope, ShowWhen};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -33,6 +34,17 @@ pub struct ImageOptions {
     /// DDS only: write the full mip chain.
     #[serde(default)]
     pub dds_mipmaps: bool,
+    /// WebP only: `lossless` (unset) or `lossy` (at `quality`).
+    #[serde(default)]
+    pub webp_mode: Option<String>,
+}
+
+impl ImageOptions {
+    pub fn webp_lossy(&self) -> bool {
+        self.webp_mode
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("lossy"))
+    }
 }
 
 impl Default for ImageOptions {
@@ -45,9 +57,143 @@ impl Default for ImageOptions {
             resize_height: None,
             dds_format: None,
             dds_mipmaps: false,
+            webp_mode: None,
         }
     }
 }
+
+// ── What the panel offers ───────────────────────────────────────────────────
+// Declared once here and attached to the formats that honour them (see
+// `conversion::options`). The bounds match `validate.rs`.
+
+/// JPG and AVIF: encoder quality.
+pub static QUALITY: OptionSpec = OptionSpec {
+    key: "quality",
+    control: Control::Slider { min: 1, max: 100 },
+    default: OptionValue::Int(DEFAULT_QUALITY as i64),
+    unit: None,
+    scope: Scope::Format,
+    quick: true,
+    show_when: None,
+    note: None,
+};
+
+pub static RESIZE_MODE: OptionSpec = OptionSpec {
+    key: "resize_mode",
+    control: Control::Choice {
+        values: &[
+            OptionValue::Text("none"),
+            OptionValue::Text("max_width"),
+            OptionValue::Text("max_height"),
+            OptionValue::Text("fit_box"),
+        ],
+    },
+    default: OptionValue::Text("none"),
+    unit: None,
+    scope: Scope::Family,
+    quick: false,
+    show_when: None,
+    note: None,
+};
+
+pub static RESIZE_WIDTH: OptionSpec = OptionSpec {
+    key: "resize_width",
+    control: Control::Number {
+        min: 1,
+        max: MAX_RESIZE_DIMENSION as i64,
+        presets: &[],
+    },
+    default: OptionValue::Unset,
+    unit: Some("px"),
+    scope: Scope::Family,
+    quick: false,
+    show_when: Some(ShowWhen {
+        key: "resize_mode",
+        values: &["max_width", "fit_box"],
+    }),
+    note: None,
+};
+
+pub static RESIZE_HEIGHT: OptionSpec = OptionSpec {
+    key: "resize_height",
+    control: Control::Number {
+        min: 1,
+        max: MAX_RESIZE_DIMENSION as i64,
+        presets: &[],
+    },
+    default: OptionValue::Unset,
+    unit: Some("px"),
+    scope: Scope::Family,
+    quick: false,
+    show_when: Some(ShowWhen {
+        key: "resize_mode",
+        values: &["max_height", "fit_box"],
+    }),
+    note: None,
+};
+
+/// Every writable image target can be resized.
+pub static RESIZE: [&OptionSpec; 3] = [&RESIZE_MODE, &RESIZE_WIDTH, &RESIZE_HEIGHT];
+
+/// DDS block compression, in the order the panel lists them.
+pub const DDS_FORMATS: &[&str] = &["bc7", "bc3", "bc1", "bc4", "bc5", "bc2"];
+
+pub static DDS_FORMAT: OptionSpec = OptionSpec {
+    key: "dds_format",
+    control: Control::Choice {
+        values: &[
+            OptionValue::Text("bc7"),
+            OptionValue::Text("bc3"),
+            OptionValue::Text("bc1"),
+            OptionValue::Text("bc4"),
+            OptionValue::Text("bc5"),
+            OptionValue::Text("bc2"),
+        ],
+    },
+    default: OptionValue::Text("bc7"),
+    unit: None,
+    scope: Scope::Format,
+    quick: true,
+    show_when: None,
+    note: None,
+};
+
+pub static DDS_MIPMAPS: OptionSpec = OptionSpec {
+    key: "dds_mipmaps",
+    control: Control::Toggle,
+    default: OptionValue::Bool(false),
+    unit: None,
+    scope: Scope::Format,
+    quick: false,
+    show_when: None,
+    note: None,
+};
+
+/// WebP: lossless by default, as before; lossy trades exactness for size.
+pub static WEBP_MODE: OptionSpec = OptionSpec {
+    key: "webp_mode",
+    control: Control::Choice {
+        values: &[OptionValue::Text("lossless"), OptionValue::Text("lossy")],
+    },
+    default: OptionValue::Text("lossless"),
+    unit: None,
+    scope: Scope::Format,
+    quick: true,
+    show_when: None,
+    note: Some("lossy uses quality"),
+};
+
+/// WebP quality, used only when lossy.
+pub static WEBP_QUALITY: OptionSpec = OptionSpec {
+    show_when: Some(ShowWhen {
+        key: "webp_mode",
+        values: &["lossy"],
+    }),
+    ..QUALITY
+};
+
+/// Largest width or height a resize may ask for.
+pub const MAX_RESIZE_DIMENSION: u32 = 16_384;
 
 pub fn compute_resize_target(
     orig_w: u32,
